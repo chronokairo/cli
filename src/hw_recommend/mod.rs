@@ -1,4 +1,4 @@
-pub mod detector;
 pub mod catalog;
-pub mod scoring;
+pub mod detector;
 pub mod recommender;
+pub mod scoring;

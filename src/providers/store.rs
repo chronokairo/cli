@@ -1,10 +1,10 @@
+use crate::models_dev::Catalog;
+use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
-use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
-use crate::models_dev::Catalog;
 
 /// A single configured provider entry.
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
@@ -18,7 +18,9 @@ pub struct ProviderEntry {
     pub enabled: bool,
 }
 
-fn default_true() -> bool { true }
+fn default_true() -> bool {
+    true
+}
 
 /// All configured providers, keyed by provider_id matching models.dev.
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
@@ -36,7 +38,9 @@ impl ProviderStore {
 
     fn load_inner() -> Result<Self> {
         let path = config_path()?;
-        if !path.exists() { return Ok(Self::default()); }
+        if !path.exists() {
+            return Ok(Self::default());
+        }
         let text = std::fs::read_to_string(&path)
             .with_context(|| format!("reading {}", path.display()))?;
         toml::from_str(&text).context("parsing providers.toml")
@@ -50,8 +54,7 @@ impl ProviderStore {
                 .with_context(|| format!("creating {}", parent.display()))?;
         }
         let text = toml::to_string_pretty(self).context("serialising providers")?;
-        std::fs::write(&path, &text)
-            .with_context(|| format!("writing {}", path.display()))?;
+        std::fs::write(&path, &text).with_context(|| format!("writing {}", path.display()))?;
         #[cfg(unix)]
         {
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
@@ -87,13 +90,15 @@ impl ProviderStore {
 
     /// Retrieve the API key for a provider (None if not configured).
     pub fn api_key(&self, provider_id: &str) -> Option<&str> {
-        self.providers.get(provider_id)
+        self.providers
+            .get(provider_id)
             .and_then(|e| e.api_key.as_deref())
     }
 
     /// Configured providers that are enabled and have a key.
     pub fn active_providers(&self) -> Vec<(&str, &ProviderEntry)> {
-        self.providers.iter()
+        self.providers
+            .iter()
             .filter(|(_, e)| e.enabled && e.api_key.is_some())
             .map(|(id, e)| (id.as_str(), e))
             .collect()
@@ -116,7 +121,12 @@ impl ProviderStore {
         let mut found: Vec<(String, String, String)> = Vec::new();
 
         for (pid, prov) in catalog {
-            if store.providers.get(pid).and_then(|e| e.api_key.as_deref()).is_some() {
+            if store
+                .providers
+                .get(pid)
+                .and_then(|e| e.api_key.as_deref())
+                .is_some()
+            {
                 continue;
             }
             for env_name in &prov.env {
@@ -134,7 +144,9 @@ impl ProviderStore {
     /// Import keys found in environment (and .env file) into the store and persist.
     pub fn import_from_env(catalog: &Catalog) -> Result<Vec<String>> {
         let detected = Self::detect_env_keys(catalog);
-        if detected.is_empty() { return Ok(vec![]); }
+        if detected.is_empty() {
+            return Ok(vec![]);
+        }
         let mut store = Self::load();
         let mut imported = Vec::new();
         for (pid, env_name, key) in detected {
@@ -149,8 +161,12 @@ impl ProviderStore {
     ///
     /// Base URL priority: store override → models.dev catalog default → built-in default.
     /// Key priority: store key → global settings / environment / `.env` (e.g. `NVIDIA_API_KEY`).
-    pub fn resolve_cloud_credentials(provider_id: &str, catalog: &Catalog) -> Result<(String, String)> {
-        let env_name = catalog.get(provider_id)
+    pub fn resolve_cloud_credentials(
+        provider_id: &str,
+        catalog: &Catalog,
+    ) -> Result<(String, String)> {
+        let env_name = catalog
+            .get(provider_id)
             .and_then(|p| p.env.first().map(|s| s.as_str()))
             .map(|s| s.to_string())
             .unwrap_or_else(|| format!("{}_API_KEY", provider_id.to_uppercase().replace('-', "_")));
@@ -162,9 +178,16 @@ impl ProviderStore {
                 "no API key for provider '{provider_id}' (set via 'rust-agent providers set {provider_id} <key>' or ${env_name})"
             ))?;
 
-        let base = store.providers.get(provider_id)
+        let base = store
+            .providers
+            .get(provider_id)
             .and_then(|e| e.api_base.clone())
-            .or_else(|| catalog.get(provider_id).filter(|p| !p.api.is_empty()).map(|p| p.api.clone()))
+            .or_else(|| {
+                catalog
+                    .get(provider_id)
+                    .filter(|p| !p.api.is_empty())
+                    .map(|p| p.api.clone())
+            })
             .unwrap_or_else(|| crate::providers::verify::default_base(provider_id));
 
         Ok((base, key))
@@ -189,21 +212,29 @@ fn load_env_with_dotenv() -> HashMap<String, String> {
     // Try project .env in cwd, then parent dirs up to 3 levels
     let candidates = [
         std::env::current_dir().ok().map(|p| p.join(".env")),
-        std::env::current_dir().ok().and_then(|p| p.parent().map(|pp| pp.join(".env"))),
+        std::env::current_dir()
+            .ok()
+            .and_then(|p| p.parent().map(|pp| pp.join(".env"))),
     ];
     for maybe_path in candidates.into_iter().flatten() {
         if maybe_path.exists() {
             if let Ok(text) = std::fs::read_to_string(&maybe_path) {
                 for line in text.lines() {
                     let line = line.trim();
-                    if line.is_empty() || line.starts_with('#') { continue; }
+                    if line.is_empty() || line.starts_with('#') {
+                        continue;
+                    }
                     // Remove optional `export ` prefix
                     let line = line.strip_prefix("export ").unwrap_or(line);
                     if let Some((k, v)) = line.split_once('=') {
                         let k = k.trim().to_string();
                         let v_trimmed = v.trim();
-                        let val = if (v_trimmed.starts_with('"') && v_trimmed.ends_with('"') && v_trimmed.len() >= 2)
-                            || (v_trimmed.starts_with('\'') && v_trimmed.ends_with('\'') && v_trimmed.len() >= 2)
+                        let val = if (v_trimmed.starts_with('"')
+                            && v_trimmed.ends_with('"')
+                            && v_trimmed.len() >= 2)
+                            || (v_trimmed.starts_with('\'')
+                                && v_trimmed.ends_with('\'')
+                                && v_trimmed.len() >= 2)
                         {
                             v_trimmed[1..v_trimmed.len() - 1].to_string()
                         } else {
@@ -237,17 +268,24 @@ pub fn print_store(store: &ProviderStore, catalog: &Catalog) {
     println!("\n  Configured cloud providers");
     println!("  Config: {}", ProviderStore::config_path_display());
     println!("{}", "─".repeat(70));
-    println!("  {:<20} {:<8} {:<10} {:<30}", "Provider", "Enabled", "Key", "API base");
+    println!(
+        "  {:<20} {:<8} {:<10} {:<30}",
+        "Provider", "Enabled", "Key", "API base"
+    );
     println!("{}", "─".repeat(70));
 
     // Only show providers that are configured or have keys in env
     let env_detected: Vec<_> = ProviderStore::detect_env_keys(catalog);
-    let env_providers: std::collections::HashSet<&str> =
-        env_detected.iter().map(|(pid, _, _)| pid.as_str()).collect();
+    let env_providers: std::collections::HashSet<&str> = env_detected
+        .iter()
+        .map(|(pid, _, _)| pid.as_str())
+        .collect();
 
     let mut ids: Vec<String> = store.providers.keys().cloned().collect();
     for (pid, _, _) in &env_detected {
-        if !ids.contains(pid) { ids.push(pid.clone()); }
+        if !ids.contains(pid) {
+            ids.push(pid.clone());
+        }
     }
     ids.sort();
 
@@ -260,24 +298,37 @@ pub fn print_store(store: &ProviderStore, catalog: &Catalog) {
             None if in_env => "env (not saved)".into(),
             None => "—".into(),
         };
-        let base = entry.and_then(|e| e.api_base.as_deref())
+        let base = entry
+            .and_then(|e| e.api_base.as_deref())
             .or_else(|| catalog.get(id).map(|p| p.api.as_str()))
             .unwrap_or("—");
         let enabled_str = if enabled { "yes" } else { "—" };
-        println!("  {:<20} {:<8} {:<15} {:<30}", id, enabled_str, key_status, base);
+        println!(
+            "  {:<20} {:<8} {:<15} {:<30}",
+            id, enabled_str, key_status, base
+        );
     }
 
     if ids.is_empty() {
         println!("  (none — use: rust-agent providers set <id> <api-key>)");
         println!("  (or:   rust-agent providers import   to read from environment)");
     } else if !env_detected.is_empty() {
-        let unsaved: Vec<_> = env_detected.iter()
-            .filter(|(pid, _, _)| store.providers.get(pid).and_then(|e| e.api_key.as_deref()).is_none())
+        let unsaved: Vec<_> = env_detected
+            .iter()
+            .filter(|(pid, _, _)| {
+                store
+                    .providers
+                    .get(pid)
+                    .and_then(|e| e.api_key.as_deref())
+                    .is_none()
+            })
             .map(|(pid, env, _)| format!("{pid} (${env})"))
             .collect();
         if !unsaved.is_empty() {
             println!("\n  ⚡ Keys found in environment but not yet saved:");
-            for s in &unsaved { println!("     {s}"); }
+            for s in &unsaved {
+                println!("     {s}");
+            }
             println!("  Run: rust-agent providers import");
         }
     }
@@ -377,7 +428,10 @@ mod tests {
     fn set_base_overrides_default() {
         let mut s = ProviderStore::default();
         s.set_base("fakeco", "https://proxy.example.com");
-        assert_eq!(s.providers["fakeco"].api_base.as_deref(), Some("https://proxy.example.com"));
+        assert_eq!(
+            s.providers["fakeco"].api_base.as_deref(),
+            Some("https://proxy.example.com")
+        );
     }
 
     #[test]
@@ -387,7 +441,10 @@ mod tests {
         std::env::set_var("HOME", "/tmp/anamnesic-store-test");
         std::env::remove_var("USERPROFILE");
         let p = config_path().unwrap();
-        assert_eq!(p, PathBuf::from("/tmp/anamnesic-store-test/.anamnesic/providers.toml"));
+        assert_eq!(
+            p,
+            PathBuf::from("/tmp/anamnesic-store-test/.anamnesic/providers.toml")
+        );
         match prev {
             Some(v) => std::env::set_var("HOME", v),
             None => std::env::remove_var("HOME"),

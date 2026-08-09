@@ -74,7 +74,7 @@ fn expand_home(path: &str) -> String {
     path.to_string()
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Config {
     pub workspace_dir: PathBuf,
     pub memory_dir: PathBuf,
@@ -121,6 +121,8 @@ pub struct Config {
     pub write_tool_policy: ApprovalPolicy,
     pub command_tool_policy: ApprovalPolicy,
     pub mcp_servers: Vec<crate::mcp::McpServerConfig>,
+    /// Task-routing policy (local-first SLM vs remote cloud model).
+    pub routing: crate::llm::routing::policy::RoutingPolicy,
 }
 
 impl Default for Config {
@@ -234,6 +236,7 @@ impl Default for Config {
                 ApprovalPolicy::Allow,
             ),
             mcp_servers: Vec::new(),
+            routing: crate::llm::routing::policy::RoutingPolicy::from_env(),
         }
     }
 }

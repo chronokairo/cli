@@ -29,10 +29,14 @@ impl CompressLayer2 {
         self.original_tokens = estimate_tokens(&original);
 
         let mut text = normalize_opaque_tokens(&original);
-        if text != original { rules.push("opaque_norm".into()); }
+        if text != original {
+            rules.push("opaque_norm".into());
+        }
 
         let path_shrunk = shorten_paths_l2(&text);
-        if path_shrunk != text { rules.push("path_shrink".into()); }
+        if path_shrunk != text {
+            rules.push("path_shrink".into());
+        }
         text = path_shrunk;
 
         text = collapse_whitespace(&text);
@@ -53,7 +57,9 @@ fn estimate_tokens(input: &str) -> usize {
 
 fn normalize_opaque_tokens(input: &str) -> String {
     let mut s = input.to_string();
-    if let Ok(re) = regex::Regex::new(r"\beyJ[A-Za-z0-9_-]{10,}\.(?:[A-Za-z0-9_-]{10,}\.)[A-Za-z0-9_-]{10,}\b") {
+    if let Ok(re) =
+        regex::Regex::new(r"\beyJ[A-Za-z0-9_-]{10,}\.(?:[A-Za-z0-9_-]{10,}\.)[A-Za-z0-9_-]{10,}\b")
+    {
         s = re.replace_all(&s, "<JWT>").to_string();
     }
     if let Ok(re) = regex::Regex::new(r"\b[0-9a-fA-F]{40,}\b") {
@@ -71,18 +77,20 @@ fn shorten_paths_l2(input: &str) -> String {
             let path = &caps[1];
             let segments: Vec<&str> = path.split('/').collect();
             if segments.len() > 3 {
-                format!("\"{}", segments[segments.len()-3..].join("/"))
+                format!("\"{}", segments[segments.len() - 3..].join("/"))
             } else {
                 format!("\"{}", path)
             }
-        }).to_string()
+        })
+        .to_string()
     } else {
         input.to_string()
     }
 }
 
 fn collapse_whitespace(input: &str) -> String {
-    input.lines()
+    input
+        .lines()
         .map(|line| {
             let indent = line.len() - line.trim_start().len();
             if indent > 4 {
@@ -97,7 +105,11 @@ fn collapse_whitespace(input: &str) -> String {
 
 fn consolidate_prefixes(input: &str) -> String {
     let lines: Vec<&str> = input.lines().collect();
-    let non_empty: Vec<&str> = lines.iter().filter(|l| !l.trim().is_empty()).copied().collect();
+    let non_empty: Vec<&str> = lines
+        .iter()
+        .filter(|l| !l.trim().is_empty())
+        .copied()
+        .collect();
     if non_empty.len() < 3 {
         return input.to_string();
     }
@@ -113,7 +125,8 @@ fn consolidate_prefixes(input: &str) -> String {
         m
     };
 
-    let best = prefix_counts.iter()
+    let best = prefix_counts
+        .iter()
         .filter(|(_, &c)| c >= 3)
         .max_by_key(|(_, &c)| c);
 
@@ -123,10 +136,16 @@ fn consolidate_prefixes(input: &str) -> String {
     };
 
     let ratio = count as f64 / non_empty.len() as f64;
-    if ratio < 0.5 { return input.to_string(); }
+    if ratio < 0.5 {
+        return input.to_string();
+    }
 
     let mut out = String::new();
-    out.push_str(&format!("[common: {}] ×{} lines\n", common_prefix.trim(), count));
+    out.push_str(&format!(
+        "[common: {}] ×{} lines\n",
+        common_prefix.trim(),
+        count
+    ));
     for line in lines {
         let trimmed = line.trim();
         if trimmed.starts_with(common_prefix.trim()) {
@@ -168,7 +187,9 @@ mod tests {
         let url = normalize_opaque_tokens("see https://example.com/a/b?q=1");
         assert!(url.contains("https://<URL>"), "got: {url}");
 
-        let hash = normalize_opaque_tokens("key 1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef end");
+        let hash = normalize_opaque_tokens(
+            "key 1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef end",
+        );
         assert!(hash.contains("<HASH>"), "got: {hash}");
     }
 
@@ -199,7 +220,8 @@ mod tests {
             "module/project/src/common/path.rs beta two",
             "module/project/src/common/path.rs gamma three",
             "module/project/src/common/path.rs delta four",
-        ].join("\n");
+        ]
+        .join("\n");
         let out = consolidate_prefixes(&input);
         assert!(out.contains("[common:"), "got: {out}");
         assert!(out.contains("×4 lines"), "got: {out}");

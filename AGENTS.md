@@ -2,6 +2,61 @@
 
 This file lists all the index.md files created in the src directory and its subdirectories, providing a map of where documentation for each module can be found.
 
+## Architecture Design Pattern (Binding — August 2026)
+
+The Anamnesic harness follows a layered architecture derived from the union of three leading 2026-era coding agent architectures:
+
+| Layer | Reference Harness | Core Abstraction |
+|-------|-------------------|------------------|
+| **Tool Layer** | Claude Code | Single `Tool` trait: `schema() + execute() + effect_class + approval_gate`. Registry replaces stringly-typed `match` dispatch. MCP tools wrapped identically. |
+| **Loop Layer** | Claude Code | Pure while-loop orchestration with 7-phase pipeline per tool call: validate → pre-hooks → permission → execute → post-hooks → concurrency scheduler → context update. Typed state machine (`ToolLoopOutcome`, `VerificationAction`). |
+| **Core↔UI Decoupling** | Codex CLI | Queue-pair protocol: `Op` (client→core) / `EventMsg` (core→client) over async channels. Core runs as `Session { submit(Op), next_event() }`. UI/headless/app-server/MCP-server are consumers of the same event stream. |
+| **State Layer** | OpenHands V1 | Append-only typed event log as single source of truth. `ActionEvent`/`ObservationEvent` replace `(role,content)` vectors. Deterministic replay, pause/resume, condenser. (Incremental adoption; current `(role,content)` history persists alongside.) |
+| **Transactional Layer** | Anamnesic (unique) | Per-turn workspace snapshot → diff → rollback/keep. Verification gate after mutations with repair budget. |
+
+### Module Target Layout (Refactoring Goal)
+
+```
+src/
+├── protocol/          # Queue-pair: Op/EventMsg, Session(submit/next_event)
+├── app_server/        # JSON-RPC 2.0 stdio server (Codex app-server pattern)
+├── agent/
+│   ├── loop.rs        # Pure orchestration loop
+│   ├── tool_registry.rs # Tool trait + registry (replaces execute_tool match)
+│   ├── verify.rs      # Verification gate + repair loop
+│   ├── finalize.rs    # Transaction finalization + adversarial review
+│   ├── subagent.rs    # task tool / sub-agent spawning
+│   ├── planner.rs     # Plan generation
+│   ├── state.rs       # AgentState (kept)
+│   └── tool_defs.rs   # Tool schemas as data
+├── mcp/
+│   ├── client.rs      # Existing client (kept)
+│   └── server.rs      # MCP server exposing harness as tools
+├── ui/                # TUI consumer of protocol Session (hooks bridge)
+├── terminal/          # Web terminal (kept)
+└── ...                # Other modules (kept)
+```
+
+### Key Invariants
+
+1. **Single tool interface** — Every capability (native or MCP) implements `Tool { schema, execute, effect_class, is_concurrency_safe, requires_approval }`.
+2. **Protocol is the boundary** — No direct hooks from TUI into core loop. The TUI uses a hooks→protocol bridge. `codex exec`, `app-server`, `mcp-server` all drive the same `Session`.
+3. **Approval via protocol** — `Op::ExecApproval` / `Op::PlanApproval` route decisions to blocked callbacks. Plan mode adds `PlanApprovalRequest` event.
+4. **Event log is canonical** — All state mutations produce typed events. History reconstruction never loses tool calls.
+5. **Transactionality is local** — Workspace snapshot/rollback lives in `tools/transaction.rs`; loop layer treats it as opaque gate.
+
+### Migration Checklist (Do Not Skip)
+
+- [ ] Add `protocol` crate with `Op`, `EventMsg`, `Session`.
+- [ ] Add `on_plan_approval` to `AgentHooks`, gate in `run_planner_fallback`.
+- [ ] `exec` subcommand (human/JSONL).
+- [ ] `app-server` subcommand (JSON-RPC stdio).
+- [ ] `mcp-server` subcommand (MCP server with `run_coder` tool).
+- [ ] Split `agent_loop.rs` into `loop.rs` + `tool_registry.rs` + `verify.rs` + `finalize.rs`.
+- [ ] Replace `execute_tool` match with registry dispatch.
+- [ ] Event-log persistence in `AgentState.persist_session`.
+- [ ] TUI consumes `Session` via hooks bridge (not direct `run_agent_loop_with_hooks`).
+
 ## Documentation Index
 
 - [`src/index.md`](src/index.md) - Overview of the src directory
@@ -38,4 +93,9 @@ Each index.md file contains a list of files in that directory with brief descrip
 - [`docs/adr/0013-streaming-tool-call-deltas.md`](docs/adr/0013-streaming-tool-call-deltas.md) — Streaming Tool Call Deltas
 - [`docs/adr/0014-circuit-breaker.md`](docs/adr/0014-circuit-breaker.md) — Provider Health Checks & Circuit Breaking
 - [`docs/adr/0015-competitive-backlog.md`](docs/adr/0015-competitive-backlog.md) — Competitive Backlog (C1–C9, R1–R3)
-- [`docs/gap-analysis-2026-08.md`](docs/gap-analysis-2026-08.md) — 2026 Competitor Gap Analysis Report
+- [`docs/adr/0016-vision-gap-analysis.md`](docs/adr/0016-vision-gap-analysis.md) — Vision Gap Analysis (2026-08-08)
+- [`docs/gap-analysis-2026-08.md`](docs/gap-analysis-2026-08.md) — 2026 Competitor Gap Analysis Report
+- [`docs/gap-analysis-vision-2026-08.md`](docs/gap-analysis-vision-2026-08.md) — Vision vs. Codebase Gap Analysis (synthesis)
+- [`docs/explore-report-01-llm-routing-inference.md`](docs/explore-report-01-llm-routing-inference.md) — Explore report: LLM routing & local inference layer
+- [`docs/explore-report-02-context-memory-caching.md`](docs/explore-report-02-context-memory-caching.md) — Explore report: context, memory & caching layer
+- [`docs/explore-report-03-agent-tools-validation-security.md`](docs/explore-report-03-agent-tools-validation-security.md) — Explore report: agent loop, tools, validation & security

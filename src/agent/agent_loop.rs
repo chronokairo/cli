@@ -4,11 +4,12 @@ use crate::agent::state::{AgentState, TodoItem};
 use crate::config::settings::ApprovalPolicy;
 use crate::llm::prompt::CoderPrompt;
 use crate::llm::router::LlmRouter;
+use crate::tools::background::TaskStatus;
 use crate::tools::shell;
 use crate::tools::test::{self, VerificationResult, VerificationStatus};
-use crate::tools::background::TaskStatus;
 use crate::ui::AgentMode;
 use anyhow::Result;
+use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
@@ -58,6 +59,10 @@ pub enum AgentEvent {
         reasoning_tokens: usize,
         total_tokens: usize,
     },
+    /// Model selected by the task router at the start of a turn.
+    Routing {
+        summary: String,
+    },
     /// Reasoning content delta from thinking models (GLM-5.2, deepseek-r1, etc.).
     ReasoningDelta {
         text: String,
@@ -81,6 +86,18 @@ pub struct ApprovalRequest {
     pub risk: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct PlanApprovalRequest {
+    pub id: u64,
+    pub steps: Vec<crate::types::plan::PlanStep>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PlanApprovalDecision {
+    Approve,
+    Deny,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApprovalDecision {
     AllowOnce,
@@ -89,6 +106,7 @@ pub enum ApprovalDecision {
 }
 
 static APPROVAL_ID: AtomicU64 = AtomicU64::new(1);
+static PLAN_APPROVAL_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Streamed tool-call argument delta callback: `(call_index, tool_name, args_delta)`.
 pub type ToolCallDeltaFn = Arc<dyn Fn(usize, Option<&str>, &str) + Send + Sync>;
@@ -100,6 +118,8 @@ pub struct AgentHooks {
     pub on_tool_call_delta: Option<ToolCallDeltaFn>,
     pub on_text_delta: Option<Arc<dyn Fn(&str) + Send + Sync>>,
     pub on_approval: Option<Arc<dyn Fn(ApprovalRequest) -> ApprovalDecision + Send + Sync>>,
+    pub on_plan_approval:
+        Option<Arc<dyn Fn(PlanApprovalRequest) -> PlanApprovalDecision + Send + Sync>>,
     pub interrupt: Option<Arc<AtomicBool>>,
 }
 
@@ -252,6 +272,25 @@ impl AgentHooks {
                     ApprovalDecision::Deny => Err(format!("{tool} was not approved")),
                 }
             }
+        }
+    }
+
+    pub fn require_plan_approval(
+        &self,
+        steps: Vec<crate::types::plan::PlanStep>,
+    ) -> Result<(), String> {
+        let request = PlanApprovalRequest {
+            id: PLAN_APPROVAL_ID.fetch_add(1, Ordering::Relaxed),
+            steps,
+        };
+        match self
+            .on_plan_approval
+            .as_ref()
+            .map(|callback| callback(request))
+            .unwrap_or(PlanApprovalDecision::Deny)
+        {
+            PlanApprovalDecision::Approve => Ok(()),
+            PlanApprovalDecision::Deny => Err("Plan was not approved".into()),
         }
     }
 
@@ -437,7 +476,10 @@ async fn run_tool_use_iteration(
             let line = if cost.total() > 0.0 {
                 format!(
                     "  [usage] {} prompt + {} completion = {} total tokens (${:.4})",
-                    usage.prompt_tokens, usage.completion_tokens, usage.total_tokens, cost.total()
+                    usage.prompt_tokens,
+                    usage.completion_tokens,
+                    usage.total_tokens,
+                    cost.total()
                 )
             } else {
                 format!(
@@ -663,11 +705,9 @@ enum ToolEffect {
 
 fn tool_effect(name: &str) -> ToolEffect {
     match name {
-        "read_file" | "list_tree" | "search_code" | "git_status" | "git_diff"
-        | "list_skills" | "load_skill" => {
-            ToolEffect::ReadOnly
-        }
-            "write_file" | "replace_exact" | "edit_file" | "multi_edit_file" => ToolEffect::Mutation,
+        "read_file" | "list_tree" | "search_code" | "git_status" | "git_diff" | "list_skills"
+        | "load_skill" => ToolEffect::ReadOnly,
+        "write_file" | "replace_exact" | "edit_file" | "multi_edit_file" => ToolEffect::Mutation,
         _ => ToolEffect::Command,
     }
 }
@@ -677,7 +717,10 @@ fn connect_mcp_clients(state: &mut AgentState, hooks: &AgentHooks) {
     for config in configs {
         match crate::mcp::McpClient::connect(&config) {
             Ok(client) => state.mcp_clients.push(client),
-            Err(err) => hooks.warn(&format!("[mcp] failed to connect to {}: {err}", config.command)),
+            Err(err) => hooks.warn(&format!(
+                "[mcp] failed to connect to {}: {err}",
+                config.command
+            )),
         }
     }
 }
@@ -717,7 +760,6 @@ fn try_mcp_tool(
 }
 
 /// Owned, `Send + Sync` view of the workspace used to run read-only tools
-
 
 /// concurrently without sharing `AgentState` (which holds a SQLite handle).
 struct ReadContext {
@@ -999,7 +1041,11 @@ fn execute_tool(
                         verification: Some(verification),
                     }
                 } else {
-                    let output = shell::run_command_raw_with_interrupt(command, &state.config, hooks.interrupt.as_deref());
+                    let output = shell::run_command_raw_with_interrupt(
+                        command,
+                        &state.config,
+                        hooks.interrupt.as_deref(),
+                    );
                     ToolExecutionResult {
                         output: truncate_tool_output(&output.combined(), cap),
                         mutated: false,
@@ -1117,7 +1163,10 @@ fn execute_tool(
                                 ToolExecutionResult::output(format!("completed todo: {done}"))
                             } else {
                                 let removed = state.todos.remove(pos);
-                                ToolExecutionResult::output(format!("removed todo: {}", removed.text))
+                                ToolExecutionResult::output(format!(
+                                    "removed todo: {}",
+                                    removed.text
+                                ))
                             }
                         }
                         _ => ToolExecutionResult::output(
@@ -1144,9 +1193,9 @@ fn execute_tool(
                 .unwrap_or(5);
             use crate::llm::embedder::EmbedKind;
             match state.embedder.embed(query, EmbedKind::Query) {
-                Err(error) => ToolExecutionResult::output(format!(
-                    "embedding unavailable: {error}"
-                )),
+                Err(error) => {
+                    ToolExecutionResult::output(format!("embedding unavailable: {error}"))
+                }
                 Ok(embedding) => match state.long_memory.search_vectors(&embedding, k) {
                     Err(error) => {
                         ToolExecutionResult::output(format!("memory search failed: {error}"))
@@ -1221,7 +1270,10 @@ fn execute_tool(
                 Some((status, output, elapsed)) => {
                     let label = match status {
                         TaskStatus::Running => "running".to_string(),
-                        TaskStatus::Done { exit_code, timed_out } => match (exit_code, timed_out) {
+                        TaskStatus::Done {
+                            exit_code,
+                            timed_out,
+                        } => match (exit_code, timed_out) {
                             (Some(code), false) => format!("done (exit {code})"),
                             (None, true) => "done (timed out)".to_string(),
                             _ => "done".to_string(),
@@ -1272,7 +1324,9 @@ fn execute_tool(
                 index
                     .all()
                     .iter()
-                    .filter(|s| s.symbol_type == st && s.name.to_lowercase().contains(&query.to_lowercase()))
+                    .filter(|s| {
+                        s.symbol_type == st && s.name.to_lowercase().contains(&query.to_lowercase())
+                    })
                     .take(limit)
                     .collect()
             } else {
@@ -1283,17 +1337,25 @@ fn execute_tool(
             } else {
                 let lines: Vec<String> = results
                     .iter()
-                    .map(|s| format!("{} {} {}:{}", s.symbol_type, s.name, s.file_path, s.line_number))
+                    .map(|s| {
+                        format!(
+                            "{} {} {}:{}",
+                            s.symbol_type, s.name, s.file_path, s.line_number
+                        )
+                    })
                     .collect();
                 ToolExecutionResult::output(lines.join("\n"))
             }
         }
         "task" => {
-            let model = string_arg("model").unwrap_or(&state.config.coder_model).to_string();
+            let model = string_arg("model")
+                .unwrap_or(&state.config.coder_model)
+                .to_string();
             // Accept either a single `task` string or a `tasks` array; the
             // array form fans out to N sub-agents that run concurrently and
             // report back together (C3 parallel sub-agents).
-            let tasks: Vec<String> = if let Some(arr) = args.get("tasks").and_then(|v| v.as_array()) {
+            let tasks: Vec<String> = if let Some(arr) = args.get("tasks").and_then(|v| v.as_array())
+            {
                 arr.iter()
                     .filter_map(|v| v.as_str().map(|s| s.to_string()))
                     .filter(|s| !s.trim().is_empty())
@@ -1333,8 +1395,11 @@ fn execute_tool(
                             }
                             Err(error) => {
                                 if let Some(tx) = tx.lock().unwrap().take() {
-                                    let _ =
-                                        tx.send((idx, format!("state init failed: {error}"), false));
+                                    let _ = tx.send((
+                                        idx,
+                                        format!("state init failed: {error}"),
+                                        false,
+                                    ));
                                 }
                                 return;
                             }
@@ -1343,24 +1408,23 @@ fn execute_tool(
                         sub_state.session.add_message("user", &task);
                         let entry_tx = tx.clone();
                         let sub_hooks = AgentHooks {
-                            on_event: Some(Arc::new(move |event| {
-                                match event {
-                                    AgentEvent::Done { message } => {
-                                        if let Some(tx) = entry_tx.lock().unwrap().take() {
-                                            let _ = tx.send((idx, message.clone(), true));
-                                        }
+                            on_event: Some(Arc::new(move |event| match event {
+                                AgentEvent::Done { message } => {
+                                    if let Some(tx) = entry_tx.lock().unwrap().take() {
+                                        let _ = tx.send((idx, message.clone(), true));
                                     }
-                                    AgentEvent::Failed { message } => {
-                                        if let Some(tx) = entry_tx.lock().unwrap().take() {
-                                            let _ = tx.send((idx, message.clone(), false));
-                                        }
-                                    }
-                                    _ => {}
                                 }
+                                AgentEvent::Failed { message } => {
+                                    if let Some(tx) = entry_tx.lock().unwrap().take() {
+                                        let _ = tx.send((idx, message.clone(), false));
+                                    }
+                                }
+                                _ => {}
                             })),
                             on_tool_call_delta: None,
                             on_text_delta: None,
                             on_approval: sub_approval,
+                            on_plan_approval: None,
                             interrupt: None,
                         };
                         let _ = run_agent_loop_with_hooks(
@@ -1546,7 +1610,11 @@ fn finalize_transaction(state: &mut AgentState, hooks: &AgentHooks, succeeded: b
                 fingerprint
             );
         }
-        return format!("\nWorkspace diff: {} (checksum: {})", diff.summary(), diff.checksum());
+        return format!(
+            "\nWorkspace diff: {} (checksum: {})",
+            diff.summary(),
+            diff.checksum()
+        );
     }
 
     if !state.config.rollback_on_failure {
@@ -1664,12 +1732,7 @@ fn search_workspace_without_rg(root: &std::path::Path, pattern: &str) -> String 
                 if matcher.is_match(line) {
                     let relative = path.strip_prefix(root).unwrap_or(&path);
                     let rel_str = relative.display().to_string().replace('\\', "/");
-                    matches.push(format!(
-                        "{}:{}:{}",
-                        rel_str,
-                        line_index + 1,
-                        line
-                    ));
+                    matches.push(format!("{}:{}:{}", rel_str, line_index + 1, line));
                     if matches.len() == MAX_MATCHES {
                         return matches.join("\n");
                     }
@@ -2004,12 +2067,32 @@ pub async fn run_agent_loop_with_hooks(
 
     match mode {
         AgentMode::Agent => run_agent_mode(client, state, task, hooks).await,
-        AgentMode::Plan => run_planner_fallback(client, state, task, hooks).await,
+        AgentMode::Plan => run_planner_fallback(client, state, task, hooks, true).await,
     }
     // Persist the transcript at turn boundaries (append-only, crash-safe).
     if let Err(e) = state.persist_session() {
         hooks.warn(&format!("  [persist] session save failed: {e}"));
     }
+}
+
+/// Route the current turn when the task router is enabled, falling back to
+/// the configured coder model when routing is off or cannot pick a model.
+/// Returns the model name to drive the turn with.
+fn route_turn(client: &LlmRouter, state: &AgentState, task: &str, hooks: &AgentHooks) -> String {
+    if !state.config.routing.enabled {
+        return state.config.coder_model.clone();
+    }
+    let decision = crate::llm::routing::route_agent_turn(client, state, task);
+    if let Some(error) = &decision.error {
+        hooks.note(&format!("  [routing] {error}; using configured model"));
+        return state.config.coder_model.clone();
+    }
+    if decision.selected_model != state.config.coder_model {
+        hooks.emit(AgentEvent::Routing {
+            summary: decision.summary(),
+        });
+    }
+    decision.selected_model
 }
 
 /// Agent mode: tool-use iteration first, planner fallback on failure.
@@ -2020,7 +2103,7 @@ async fn run_agent_mode(
     hooks: &AgentHooks,
 ) {
     let tools = coding_tools(state);
-    let model = state.config.coder_model.clone();
+    let model = route_turn(client, state, task, hooks);
     let prior = state.session.conversation();
     match run_tool_use_iteration(client, state, &model, task, &tools, hooks, &prior).await {
         Ok(ToolLoopOutcome::Completed(final_text)) => {
@@ -2060,7 +2143,7 @@ async fn run_agent_mode(
         return;
     }
 
-    run_planner_fallback(client, state, task, hooks).await;
+    run_planner_fallback(client, state, task, hooks, false).await;
 }
 
 /// Shared planner fallback: generate a plan, execute steps, verify, and fix.
@@ -2069,6 +2152,7 @@ async fn run_planner_fallback(
     state: &mut AgentState,
     task: &str,
     hooks: &AgentHooks,
+    require_plan_approval: bool,
 ) {
     let context = state.session.get_context();
     let fallback_plan = || crate::types::plan::Plan {
@@ -2080,20 +2164,15 @@ async fn run_planner_fallback(
             command: None,
         }],
     };
-    let plan = planner::plan_task(
-        client,
-        &state.config.planner_model,
-        task,
-        &context,
-    )
-    .await
-    .unwrap_or_else(|e| {
-        state.session.add_message(
-            "Error",
-            &format!("Planner error: {e}. Falling back to direct execution."),
-        );
-        fallback_plan()
-    });
+    let plan = planner::plan_task(client, &state.config.planner_model, task, &context)
+        .await
+        .unwrap_or_else(|e| {
+            state.session.add_message(
+                "Error",
+                &format!("Planner error: {e}. Falling back to direct execution."),
+            );
+            fallback_plan()
+        });
 
     let steps = plan.steps;
     hooks.note(&format!("  [plan] {} step(s)", steps.len()));
@@ -2101,6 +2180,16 @@ async fn run_planner_fallback(
         finalize_transaction(state, hooks, true);
         hooks.done("Planner returned no steps.");
         return;
+    }
+
+    // Plan approval gate: in explicit Plan mode, ask for approval before executing.
+    if require_plan_approval {
+        if let Err(message) = hooks.require_plan_approval(steps.clone()) {
+            state.session.add_message("Error", &message);
+            finalize_transaction(state, hooks, false);
+            hooks.failed(&message);
+            return;
+        }
     }
 
     // Fail fast with a clear message if the selected coder model's backend is
@@ -2153,7 +2242,9 @@ async fn run_planner_fallback(
             let tools = coding_tools(state);
             let model = state.config.coder_model.clone();
             let prior = state.session.conversation();
-            match run_tool_use_iteration(client, state, &model, &fix_task, &tools, hooks, &prior).await {
+            match run_tool_use_iteration(client, state, &model, &fix_task, &tools, hooks, &prior)
+                .await
+            {
                 Ok(ToolLoopOutcome::Completed(message)) => {
                     state.session.add_message("assistant", &message);
                     hooks.done(&message);
@@ -2254,6 +2345,108 @@ mod tests {
         ))
     }
 
+    fn recording_hooks() -> (AgentHooks, Arc<Mutex<Vec<AgentEvent>>>) {
+        let events: Arc<Mutex<Vec<AgentEvent>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink = events.clone();
+        (
+            AgentHooks {
+                on_event: Some(Arc::new(move |ev: AgentEvent| {
+                    sink.lock().unwrap().push(ev);
+                })),
+                ..Default::default()
+            },
+            events,
+        )
+    }
+
+    fn routing_state(tag: &str, routing: crate::llm::routing::policy::RoutingPolicy) -> AgentState {
+        let root =
+            std::env::temp_dir().join(format!("anamnesic-routing-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let config = crate::config::settings::Config {
+            workspace_dir: root.join("workspace"),
+            memory_dir: root.join("memory"),
+            routing,
+            ..crate::config::settings::Config::default()
+        };
+        AgentState::new(config).unwrap()
+    }
+
+    #[test]
+    fn route_turn_passthrough_when_routing_disabled() {
+        let state = routing_state(
+            "disabled",
+            crate::llm::routing::policy::RoutingPolicy {
+                enabled: false,
+                ..crate::llm::routing::policy::RoutingPolicy::default()
+            },
+        );
+        let (hooks, events) = recording_hooks();
+        let model = route_turn(&dummy_router(), &state, "explain this function", &hooks);
+        assert_eq!(model, state.config.coder_model);
+        assert!(events.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn route_turn_picks_local_and_emits_routing_event() {
+        let mut state = routing_state(
+            "enabled",
+            crate::llm::routing::policy::RoutingPolicy::default(),
+        );
+        state.config.coder_model = "z-ai/glm-5.2".into();
+        let mut models = std::collections::HashMap::new();
+        models.insert(
+            "z-ai/glm-5.2".into(),
+            crate::models_dev::types::ModelInfo {
+                id: "z-ai/glm-5.2".into(),
+                name: "z-ai/glm-5.2".into(),
+                family: "glm-5.2".into(),
+                reasoning: true,
+                tool_call: true,
+                temperature: false,
+                open_weights: true,
+                attachment: false,
+                limit: crate::models_dev::types::Limits {
+                    context: 131_072,
+                    output: 4096,
+                },
+                cost: crate::models_dev::types::Cost {
+                    input: 0.5,
+                    output: 1.0,
+                    cache_read: None,
+                    cache_write: None,
+                },
+                modalities: crate::models_dev::types::Modalities::default(),
+                knowledge: None,
+                release_date: None,
+            },
+        );
+        let mut catalog = crate::models_dev::types::Catalog::new();
+        catalog.insert(
+            "nvidia".into(),
+            crate::models_dev::types::Provider {
+                id: "nvidia".into(),
+                name: "nvidia".into(),
+                api: String::new(),
+                env: vec![],
+                doc: String::new(),
+                models,
+            },
+        );
+        let router = LlmRouter::with_cloud_for_test(
+            crate::llm::client::LlmClient::ollama("http://localhost:11434"),
+            crate::models_dev::ModelsDevClient { catalog },
+        );
+        let (hooks, events) = recording_hooks();
+        let model = route_turn(&router, &state, "fix the typo in the README", &hooks);
+        assert_eq!(model, "qwen3:1.7b", "routing picked {model}");
+        let evs = events.lock().unwrap();
+        assert!(
+            evs.iter().any(|e| matches!(e, AgentEvent::Routing { .. })),
+            "expected a Routing event, got {evs:?}"
+        );
+    }
+
     #[test]
     fn tool_effects_are_classified_for_the_scheduler() {
         assert_eq!(tool_effect("read_file"), ToolEffect::ReadOnly);
@@ -2326,8 +2519,16 @@ mod tests {
         let result = execute_tool(&dummy_router(), &mut state, &call, &AgentHooks::default());
         // Both sub-agents report back; on the dummy router both return an
         // API-request-failed message, which still proves fan-out + aggregation.
-        assert!(result.output.contains("[task 1/2]"), "got: {}", result.output);
-        assert!(result.output.contains("[task 2/2]"), "got: {}", result.output);
+        assert!(
+            result.output.contains("[task 1/2]"),
+            "got: {}",
+            result.output
+        );
+        assert!(
+            result.output.contains("[task 2/2]"),
+            "got: {}",
+            result.output
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -2342,16 +2543,29 @@ mod tests {
     #[test]
     fn todo_tool_lists_and_completes_items() {
         let (mut state, root) = test_state("todo-tool");
-        let add = tool_call("todo", serde_json::json!({"op": "add", "text": "write tests"}));
-        let result = execute_tool(&dummy_router(), &mut state, &add, &AgentHooks::default());
-        assert!(result.output.contains("write tests"), "got: {}", result.output);
-
-        let complete = tool_call(
+        let add = tool_call(
             "todo",
-            serde_json::json!({"op": "complete", "index": 1}),
+            serde_json::json!({"op": "add", "text": "write tests"}),
         );
-        let result = execute_tool(&dummy_router(), &mut state, &complete, &AgentHooks::default());
-        assert!(result.output.contains("completed"), "got: {}", result.output);
+        let result = execute_tool(&dummy_router(), &mut state, &add, &AgentHooks::default());
+        assert!(
+            result.output.contains("write tests"),
+            "got: {}",
+            result.output
+        );
+
+        let complete = tool_call("todo", serde_json::json!({"op": "complete", "index": 1}));
+        let result = execute_tool(
+            &dummy_router(),
+            &mut state,
+            &complete,
+            &AgentHooks::default(),
+        );
+        assert!(
+            result.output.contains("completed"),
+            "got: {}",
+            result.output
+        );
 
         let list = tool_call("todo", serde_json::json!({"op": "list"}));
         let result = execute_tool(&dummy_router(), &mut state, &list, &AgentHooks::default());
@@ -2420,7 +2634,10 @@ mod tests {
         let result = try_mcp_tool(&mut state, &call, &AgentHooks::default());
         let result = result.expect("MCP tool must be handled even when denied");
         assert!(result.output.contains("was not approved"));
-        assert!(state.blocked_actions.iter().any(|a| a.contains("fake_tool")));
+        assert!(state
+            .blocked_actions
+            .iter()
+            .any(|a| a.contains("fake_tool")));
         let _ = std::fs::remove_dir_all(root);
     }
 

@@ -76,7 +76,11 @@ impl WorkspaceDiff {
         sorted_modified.sort();
         sorted_deleted.sort();
         let mut acc: u64 = 0xcbf29ce484222325;
-        for path in sorted_added.iter().chain(sorted_modified.iter()).chain(sorted_deleted.iter()) {
+        for path in sorted_added
+            .iter()
+            .chain(sorted_modified.iter())
+            .chain(sorted_deleted.iter())
+        {
             for byte in path.as_bytes() {
                 acc ^= *byte as u64;
                 acc = acc.wrapping_mul(0x100000001b3);
@@ -184,9 +188,7 @@ impl WorkspaceTransaction {
                     .map(|line| format!("+{line}"))
                     .collect::<Vec<_>>()
                     .join("\n");
-                Ok(Some(format!(
-                    "{header}@@ -0,0 +1,{count} @@\n{body}\n"
-                )))
+                Ok(Some(format!("{header}@@ -0,0 +1,{count} @@\n{body}\n")))
             }
             (Some(old), None) => {
                 let text = String::from_utf8_lossy(old);
@@ -196,9 +198,7 @@ impl WorkspaceTransaction {
                     .map(|line| format!("-{line}"))
                     .collect::<Vec<_>>()
                     .join("\n");
-                Ok(Some(format!(
-                    "{header}@@ -1,{count} +0,0 @@\n{body}\n"
-                )))
+                Ok(Some(format!("{header}@@ -1,{count} +0,0 @@\n{body}\n")))
             }
             (None, None) => Ok(None),
         }
@@ -441,7 +441,11 @@ mod tests {
 
         fs::write(root.join("a.rs"), "alpha changed").unwrap();
         let t2 = WorkspaceTransaction::begin(root.clone(), 1_000_000).unwrap();
-        assert_ne!(fp1, t2.fingerprint(), "changing content must change fingerprint");
+        assert_ne!(
+            fp1,
+            t2.fingerprint(),
+            "changing content must change fingerprint"
+        );
 
         let _ = fs::remove_dir_all(root);
     }

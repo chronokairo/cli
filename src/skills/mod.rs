@@ -59,7 +59,9 @@ impl Skill {
 
 fn split_frontmatter(raw: &str) -> (&str, &str) {
     let trimmed = raw.trim_start_matches('\u{feff}');
-    let after = trimmed.strip_prefix("---\n").or_else(|| trimmed.strip_prefix("---\r\n"));
+    let after = trimmed
+        .strip_prefix("---\n")
+        .or_else(|| trimmed.strip_prefix("---\r\n"));
     if let Some(rest) = after {
         if let Some(end) = rest.find("\n---\n").or_else(|| rest.find("\r\n---\r\n")) {
             let body_start = end + rest[end..].find("---\n").map(|i| i + 4).unwrap_or(5);
@@ -68,7 +70,10 @@ fn split_frontmatter(raw: &str) -> (&str, &str) {
         if let Some(end) = rest.find("\n---") {
             let body_start = end + 4;
             let body = &rest[body_start..];
-            let body = body.strip_prefix('\n').or_else(|| body.strip_prefix("\r\n")).unwrap_or(body);
+            let body = body
+                .strip_prefix('\n')
+                .or_else(|| body.strip_prefix("\r\n"))
+                .unwrap_or(body);
             return (&rest[..end], body);
         }
     }
@@ -94,8 +99,10 @@ impl SkillRegistry {
         for dir in dirs {
             self.scan_dir(&dir);
         }
-        self.skills.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
-        self.skills.dedup_by(|a, b| a.name.eq_ignore_ascii_case(&b.name));
+        self.skills
+            .sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        self.skills
+            .dedup_by(|a, b| a.name.eq_ignore_ascii_case(&b.name));
     }
 
     fn scan_dir(&mut self, dir: &Path) {

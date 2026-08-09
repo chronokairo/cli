@@ -63,8 +63,7 @@ fn searxng_search(
     if !response.status().is_success() {
         anyhow::bail!("SearXNG HTTP {}", response.status());
     }
-    let json: serde_json::Value =
-        response.json().context("SearXNG returned invalid JSON")?;
+    let json: serde_json::Value = response.json().context("SearXNG returned invalid JSON")?;
     let results = json
         .get("results")
         .and_then(|value| value.as_array())
@@ -76,14 +75,8 @@ fn searxng_search(
             .get("title")
             .and_then(|v| v.as_str())
             .unwrap_or("(untitled)");
-        let url = result
-            .get("url")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        let snippet = result
-            .get("content")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let url = result.get("url").and_then(|v| v.as_str()).unwrap_or("");
+        let snippet = result.get("content").and_then(|v| v.as_str()).unwrap_or("");
         out.push(format!("{title}\n{url}\n{snippet}"));
     }
     if out.is_empty() {
@@ -97,11 +90,12 @@ fn duckduckgo_search(
     query: &str,
     max_results: usize,
 ) -> anyhow::Result<String> {
-    let url = reqwest::Url::parse_with_params(
-        "https://html.duckduckgo.com/html/",
-        &[("q", query)],
-    )?;
-    let response = client.get(url).send().context("DuckDuckGo request failed")?;
+    let url =
+        reqwest::Url::parse_with_params("https://html.duckduckgo.com/html/", &[("q", query)])?;
+    let response = client
+        .get(url)
+        .send()
+        .context("DuckDuckGo request failed")?;
     if !response.status().is_success() {
         anyhow::bail!("DuckDuckGo HTTP {}", response.status());
     }
@@ -116,24 +110,31 @@ fn duckduckgo_search(
 /// Extract DuckDuckGo HTML results (`result__a` title links + `result__snippet`
 /// summaries) with lightweight regex parsing — no HTML dependency needed.
 fn parse_ddg_results(html: &str, max_results: usize) -> Vec<String> {
-    let anchor_re = regex::Regex::new(
-        r#"class="[^"]*result__a[^"]*" href="([^"]+)"[^>]*>(.*?)</a>"#,
-    )
-    .expect("valid anchor regex");
-    let snippet_re =
-        regex::Regex::new(r#"class="result__snippet"[^>]*>(.*?)</a>"#).expect("valid snippet regex");
+    let anchor_re =
+        regex::Regex::new(r#"class="[^"]*result__a[^"]*" href="([^"]+)"[^>]*>(.*?)</a>"#)
+            .expect("valid anchor regex");
+    let snippet_re = regex::Regex::new(r#"class="result__snippet"[^>]*>(.*?)</a>"#)
+        .expect("valid snippet regex");
     let strip = regex::Regex::new(r"<[^>]+>").expect("valid strip regex");
     let anchors: Vec<(String, String)> = anchor_re
         .captures_iter(html)
         .map(|cap| {
             let href = html_unescape(&cap[1]);
-            let title = strip.replace_all(&html_unescape(&cap[2]), "").trim().to_string();
+            let title = strip
+                .replace_all(&html_unescape(&cap[2]), "")
+                .trim()
+                .to_string();
             (href, title)
         })
         .collect();
     let snippets: Vec<String> = snippet_re
         .captures_iter(html)
-        .map(|cap| strip.replace_all(&html_unescape(&cap[1]), "").trim().to_string())
+        .map(|cap| {
+            strip
+                .replace_all(&html_unescape(&cap[1]), "")
+                .trim()
+                .to_string()
+        })
         .collect();
     anchors
         .into_iter()
@@ -157,8 +158,8 @@ fn html_unescape(text: &str) -> String {
 
 fn strip_html(html: &str) -> String {
     let strip_tags = regex::Regex::new(r"<[^>]+>").expect("valid tag regex");
-    let strip_scripts =
-        regex::Regex::new(r"(?is)<script.*?</script>|<style.*?</style>").expect("valid block regex");
+    let strip_scripts = regex::Regex::new(r"(?is)<script.*?</script>|<style.*?</style>")
+        .expect("valid block regex");
     let whitespace = regex::Regex::new(r"[ \t\r\f\v]{2,}").expect("valid whitespace regex");
     let no_blocks = strip_scripts.replace_all(html, " ");
     let text = strip_tags.replace_all(&no_blocks, " ");

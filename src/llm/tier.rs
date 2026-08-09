@@ -162,10 +162,7 @@ pub fn find_same_tier_fallback(
         .collect();
 
     // Sort by cheapest input cost
-    candidates.sort_by(|a, b| {
-        a.0.partial_cmp(&b.0)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
+    candidates.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
 
     candidates.first().map(|(_, id)| id.clone())
 }
@@ -196,7 +193,10 @@ mod tests {
             classify_model_tier("nvidia/nemotron-3-ultra-550b-a55b"),
             ModelTier::Intelligent
         );
-        assert_eq!(classify_model_tier("moonshotai/kimi-k2.6"), ModelTier::Intelligent);
+        assert_eq!(
+            classify_model_tier("moonshotai/kimi-k2.6"),
+            ModelTier::Intelligent
+        );
     }
 
     #[test]
@@ -217,12 +217,18 @@ mod tests {
 
     #[test]
     fn classifies_dumb_tier() {
-        assert_eq!(classify_model_tier("nvidia/nemotron-nano-9b-v2"), ModelTier::Dumb);
+        assert_eq!(
+            classify_model_tier("nvidia/nemotron-nano-9b-v2"),
+            ModelTier::Dumb
+        );
         assert_eq!(
             classify_model_tier("nvidia/llama-3.1-nemotron-nano-8b-v1"),
             ModelTier::Dumb
         );
-        assert_eq!(classify_model_tier("mistralai/mistral-nemo-12b-instruct"), ModelTier::Dumb);
+        assert_eq!(
+            classify_model_tier("mistralai/mistral-nemo-12b-instruct"),
+            ModelTier::Dumb
+        );
     }
 
     #[test]
@@ -237,7 +243,7 @@ mod tests {
     }
 
     fn test_catalog_with_multiple_tiers() -> crate::models_dev::ModelsDevClient {
-        use crate::models_dev::types::{Cost, Limits, Modalities, Provider, ModelInfo};
+        use crate::models_dev::types::{Cost, Limits, Modalities, ModelInfo, Provider};
         use std::collections::HashMap;
 
         let make = |id: &str, tier_id: &str, cost_in: f64| ModelInfo {
@@ -249,18 +255,38 @@ mod tests {
             temperature: false,
             open_weights: true,
             attachment: false,
-            limit: Limits { context: 131_072, output: 4096 },
-            cost: Cost { input: cost_in, output: cost_in, cache_read: None, cache_write: None },
-            modalities: Modalities { input: vec!["text".into()], output: vec!["text".into()] },
+            limit: Limits {
+                context: 131_072,
+                output: 4096,
+            },
+            cost: Cost {
+                input: cost_in,
+                output: cost_in,
+                cache_read: None,
+                cache_write: None,
+            },
+            modalities: Modalities {
+                input: vec!["text".into()],
+                output: vec!["text".into()],
+            },
             knowledge: None,
             release_date: None,
         };
 
         let mut nvidia_models = HashMap::new();
         nvidia_models.insert("z-ai/glm-5.2".into(), make("z-ai/glm-5.2", "glm-5.2", 0.0));
-        nvidia_models.insert("deepseek-ai/deepseek-v4-flash".into(), make("deepseek-ai/deepseek-v4-flash", "deepseek-v4", 0.0));
-        nvidia_models.insert("nvidia/nemotron-nano-9b-v2".into(), make("nvidia/nemotron-nano-9b-v2", "nano", 0.0));
-        nvidia_models.insert("nvidia/nemotron-nano-8b-v1".into(), make("nvidia/nemotron-nano-8b-v1", "nano", 0.0));
+        nvidia_models.insert(
+            "deepseek-ai/deepseek-v4-flash".into(),
+            make("deepseek-ai/deepseek-v4-flash", "deepseek-v4", 0.0),
+        );
+        nvidia_models.insert(
+            "nvidia/nemotron-nano-9b-v2".into(),
+            make("nvidia/nemotron-nano-9b-v2", "nano", 0.0),
+        );
+        nvidia_models.insert(
+            "nvidia/nemotron-nano-8b-v1".into(),
+            make("nvidia/nemotron-nano-8b-v1", "nano", 0.0),
+        );
 
         let nvidia = Provider {
             id: "nvidia".into(),

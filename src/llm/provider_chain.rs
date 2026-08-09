@@ -7,10 +7,10 @@
 //! serde = { version = "1", features = ["derive"] }
 //! rand = "0.8"
 
+use rand::Rng;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
-use rand::Rng;
 
 // ---------- Token bucket (rate limiter) ----------
 
@@ -218,7 +218,11 @@ pub struct LocalProvider {
 
 impl LocalProvider {
     pub fn new(endpoint: String, model: String) -> Self {
-        Self { client: reqwest::Client::new(), endpoint, model }
+        Self {
+            client: reqwest::Client::new(),
+            endpoint,
+            model,
+        }
     }
 }
 
@@ -322,9 +326,15 @@ impl FallbackChain {
     pub fn new(providers: Vec<Arc<dyn CompletionProvider>>) -> Self {
         let wrapped: Vec<Arc<dyn CompletionProvider>> = providers
             .into_iter()
-            .map(|p| Arc::new(CircuitBreakerProvider::new(p, 3, Duration::from_secs(30))) as Arc<dyn CompletionProvider>)
+            .map(|p| {
+                Arc::new(CircuitBreakerProvider::new(p, 3, Duration::from_secs(30)))
+                    as Arc<dyn CompletionProvider>
+            })
             .collect();
-        Self { providers: wrapped, max_retries_per_provider: 3 }
+        Self {
+            providers: wrapped,
+            max_retries_per_provider: 3,
+        }
     }
 
     pub async fn complete(&self, prompt: &str) -> Result<String, String> {
@@ -376,7 +386,11 @@ async fn backoff_sleep(attempt: u32) {
 
 // ---------- Exemplo de montagem ----------
 
-pub fn build_default_chain(base_url: &str, nim_api_key: String, nim_model: String) -> FallbackChain {
+pub fn build_default_chain(
+    base_url: &str,
+    nim_api_key: String,
+    nim_model: String,
+) -> FallbackChain {
     let nim = Arc::new(NimProvider::new(base_url, nim_api_key, nim_model, 40.0));
     FallbackChain::new(vec![nim])
 }
@@ -406,7 +420,11 @@ mod tests {
 
     impl MockProvider {
         fn new(name: &'static str, result: MockResult) -> Arc<Self> {
-            Arc::new(Self { name, result, calls: AtomicUsize::new(0) })
+            Arc::new(Self {
+                name,
+                result,
+                calls: AtomicUsize::new(0),
+            })
         }
         fn calls(&self) -> usize {
             self.calls.load(Ordering::SeqCst)
@@ -431,10 +449,22 @@ mod tests {
 
     #[test]
     fn classifies_http_statuses() {
-        assert!(matches!(ProviderError::from_status(429, ""), ProviderError::RateLimited));
-        assert!(matches!(ProviderError::from_status(402, ""), ProviderError::CreditExhausted));
-        assert!(matches!(ProviderError::from_status(500, "boom"), ProviderError::Transient(_)));
-        assert!(matches!(ProviderError::from_status(403, "denied"), ProviderError::Fatal(_)));
+        assert!(matches!(
+            ProviderError::from_status(429, ""),
+            ProviderError::RateLimited
+        ));
+        assert!(matches!(
+            ProviderError::from_status(402, ""),
+            ProviderError::CreditExhausted
+        ));
+        assert!(matches!(
+            ProviderError::from_status(500, "boom"),
+            ProviderError::Transient(_)
+        ));
+        assert!(matches!(
+            ProviderError::from_status(403, "denied"),
+            ProviderError::Fatal(_)
+        ));
     }
 
     #[test]

@@ -138,10 +138,7 @@ pub fn download_embedding_model() -> Result<PathBuf> {
             println!("Already present: {}", target.display());
             return Ok(target);
         }
-        let label = url
-            .split('/')
-            .nth(4)
-            .unwrap_or("huggingface.co");
+        let label = url.split('/').nth(4).unwrap_or("huggingface.co");
         match download_to(&client, url, &target) {
             Ok(()) => {
                 println!("Downloaded: {}", target.display());
@@ -155,11 +152,7 @@ pub fn download_embedding_model() -> Result<PathBuf> {
     )
 }
 
-fn download_to(
-    client: &reqwest::blocking::Client,
-    url: &str,
-    target: &Path,
-) -> Result<()> {
+fn download_to(client: &reqwest::blocking::Client, url: &str, target: &Path) -> Result<()> {
     let mut response = client.get(url).send()?;
     if !response.status().is_success() {
         anyhow::bail!("HTTP {}", response.status());
@@ -178,10 +171,8 @@ mod tests {
 
     #[test]
     fn resolve_source_uses_global_models_dir() {
-        let tmp = std::env::temp_dir().join(format!(
-            "anamnesic-embedder-global-{}",
-            std::process::id()
-        ));
+        let tmp =
+            std::env::temp_dir().join(format!("anamnesic-embedder-global-{}", std::process::id()));
         let dir = tmp.join(".anamnesic").join("models").join("embeddings");
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("my-embed.gguf");
@@ -200,10 +191,8 @@ mod tests {
 
     #[test]
     fn resolve_source_returns_none_when_missing() {
-        let tmp = std::env::temp_dir().join(format!(
-            "anamnesic-embedder-none-{}",
-            std::process::id()
-        ));
+        let tmp =
+            std::env::temp_dir().join(format!("anamnesic-embedder-none-{}", std::process::id()));
         let prev = std::env::var_os("HOME");
         std::env::set_var("HOME", &tmp);
         std::fs::create_dir_all(&tmp).unwrap();
@@ -228,9 +217,15 @@ mod tests {
             "no embedding model in {} — run --download-embedding-model first",
             global_models_dir().display()
         );
-        let a = embedder.embed("how do I run the test suite?", EmbedKind::Query).unwrap();
-        let b = embedder.embed("run cargo test to verify the changes", EmbedKind::Passage).unwrap();
-        let c = embedder.embed("bake a cake with flour and sugar", EmbedKind::Passage).unwrap();
+        let a = embedder
+            .embed("how do I run the test suite?", EmbedKind::Query)
+            .unwrap();
+        let b = embedder
+            .embed("run cargo test to verify the changes", EmbedKind::Passage)
+            .unwrap();
+        let c = embedder
+            .embed("bake a cake with flour and sugar", EmbedKind::Passage)
+            .unwrap();
         assert_eq!(a.len(), b.len());
         assert_eq!(a.len(), c.len());
         assert!(embedder.dim() > 0);

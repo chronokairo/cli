@@ -1,8 +1,8 @@
-use anyhow::Result;
-use rand::Rng;
 use crate::llm::infer::model::Tensor;
 use crate::llm::infer::tokenizer::Tokenizer;
-use crate::llm::infer::{ops, gguf};
+use crate::llm::infer::{gguf, ops};
+use anyhow::Result;
+use rand::Rng;
 
 pub struct InferenceEngine {
     model: super::model::Model,
@@ -64,9 +64,15 @@ fn forward_layer(
     n_past: usize,
     max_seq_len: usize,
     layer: i64,
-    hidden: &mut [f32], scores: &mut [f32], attn_out: &mut [f32],
-    residual: &mut [f32], q_buf: &mut [f32], k_buf: &mut [f32],
-    v_buf: &mut [f32], gate_buf: &mut [f32], up_buf: &mut [f32],
+    hidden: &mut [f32],
+    scores: &mut [f32],
+    attn_out: &mut [f32],
+    residual: &mut [f32],
+    q_buf: &mut [f32],
+    k_buf: &mut [f32],
+    v_buf: &mut [f32],
+    gate_buf: &mut [f32],
+    up_buf: &mut [f32],
     #[cfg(feature = "gpu")] gpu: &mut Option<super::gpu::GpuContext>,
 ) {
     let n_embd = model.n_embd as usize;
@@ -85,12 +91,39 @@ fn forward_layer(
         ops::rms_norm_inplace(hidden, &weights[..n_embd], n_embd, 1, model.norm_eps);
     }
 
-    gemv(&tn(layer, "attn_q"), model, weights, hidden, q_buf, q_size, n_embd,
-        #[cfg(feature = "gpu")] gpu);
-    gemv(&tn(layer, "attn_k"), model, weights, hidden, k_buf, kv_size, n_embd,
-        #[cfg(feature = "gpu")] gpu);
-    gemv(&tn(layer, "attn_v"), model, weights, hidden, v_buf, kv_size, n_embd,
-        #[cfg(feature = "gpu")] gpu);
+    gemv(
+        &tn(layer, "attn_q"),
+        model,
+        weights,
+        hidden,
+        q_buf,
+        q_size,
+        n_embd,
+        #[cfg(feature = "gpu")]
+        gpu,
+    );
+    gemv(
+        &tn(layer, "attn_k"),
+        model,
+        weights,
+        hidden,
+        k_buf,
+        kv_size,
+        n_embd,
+        #[cfg(feature = "gpu")]
+        gpu,
+    );
+    gemv(
+        &tn(layer, "attn_v"),
+        model,
+        weights,
+        hidden,
+        v_buf,
+        kv_size,
+        n_embd,
+        #[cfg(feature = "gpu")]
+        gpu,
+    );
 
     ops::rope(q_buf, q_size, n_head, n_past, 1, model.rope_freq_base);
     ops::rope(k_buf, kv_size, n_kv_head, n_past, 1, model.rope_freq_base);
@@ -120,8 +153,11 @@ fn forward_layer(
         let offset = h * s;
         let mut maxv = scores[offset];
         for ss in 0..s {
-            if ss > n_past { scores[offset + ss] = f32::NEG_INFINITY; }
-            else if scores[offset + ss] > maxv { maxv = scores[offset + ss]; }
+            if ss > n_past {
+                scores[offset + ss] = f32::NEG_INFINITY;
+            } else if scores[offset + ss] > maxv {
+                maxv = scores[offset + ss];
+            }
         }
         let mut sum = 0.0;
         for ss in 0..=n_past {
@@ -129,7 +165,9 @@ fn forward_layer(
             sum += scores[offset + ss];
         }
         let inv = 1.0 / sum;
-        for ss in 0..s { scores[offset + ss] *= inv; }
+        for ss in 0..s {
+            scores[offset + ss] *= inv;
+        }
     }
 
     attn_out.fill(0.0);
@@ -144,11 +182,22 @@ fn forward_layer(
     }
 
     // attn_output: [n_embd × n_embd]
-    gemv(&tn(layer, "attn_output"), model, weights, attn_out, gate_buf, n_embd, n_embd,
-        #[cfg(feature = "gpu")] gpu);
+    gemv(
+        &tn(layer, "attn_output"),
+        model,
+        weights,
+        attn_out,
+        gate_buf,
+        n_embd,
+        n_embd,
+        #[cfg(feature = "gpu")]
+        gpu,
+    );
     attn_out[..n_embd].copy_from_slice(&gate_buf[..n_embd]);
 
-    for i in 0..n_embd { hidden[i] += attn_out[i]; }
+    for i in 0..n_embd {
+        hidden[i] += attn_out[i];
+    }
     residual.copy_from_slice(&hidden[..n_embd]);
 
     let name = tn(layer, "ffn_norm");
@@ -160,26 +209,65 @@ fn forward_layer(
     let gw_exists = model.tensors.contains_key(&tn(layer, "ffn_gate"));
     let uw_exists = model.tensors.contains_key(&tn(layer, "ffn_up"));
     if gw_exists && uw_exists {
-        gemv(&tn(layer, "ffn_gate"), model, weights, hidden, gate_buf, n_ff, n_embd,
-            #[cfg(feature = "gpu")] gpu);
-        gemv(&tn(layer, "ffn_up"),   model, weights, hidden, up_buf,   n_ff, n_embd,
-            #[cfg(feature = "gpu")] gpu);
+        gemv(
+            &tn(layer, "ffn_gate"),
+            model,
+            weights,
+            hidden,
+            gate_buf,
+            n_ff,
+            n_embd,
+            #[cfg(feature = "gpu")]
+            gpu,
+        );
+        gemv(
+            &tn(layer, "ffn_up"),
+            model,
+            weights,
+            hidden,
+            up_buf,
+            n_ff,
+            n_embd,
+            #[cfg(feature = "gpu")]
+            gpu,
+        );
         ops::silu_inplace(gate_buf, n_ff);
-        for i in 0..n_ff { gate_buf[i] *= up_buf[i]; }
+        for i in 0..n_ff {
+            gate_buf[i] *= up_buf[i];
+        }
 
-        gemv(&tn(layer, "ffn_down"), model, weights, gate_buf, hidden, n_embd, n_ff,
-            #[cfg(feature = "gpu")] gpu);
-        for i in 0..n_embd { hidden[i] += residual[i]; }
+        gemv(
+            &tn(layer, "ffn_down"),
+            model,
+            weights,
+            gate_buf,
+            hidden,
+            n_embd,
+            n_ff,
+            #[cfg(feature = "gpu")]
+            gpu,
+        );
+        for i in 0..n_embd {
+            hidden[i] += residual[i];
+        }
     }
 }
 
 impl InferenceEngine {
     pub fn new(model: super::model::Model, tokenizer: Tokenizer, max_seq_len: usize) -> Self {
-        let scratch = (model.n_embd * 3 + model.n_head * model.n_embd_head_k * 2
-            + model.n_ff * 2 + model.n_head * max_seq_len as i64 + model.n_embd) as usize;
+        let scratch = (model.n_embd * 3
+            + model.n_head * model.n_embd_head_k * 2
+            + model.n_ff * 2
+            + model.n_head * max_seq_len as i64
+            + model.n_embd) as usize;
         let act = vec![0.0f32; scratch];
 
-        let max_tensor = model.tensors.values().map(|t| t.nelements() as usize).max().unwrap_or(1);
+        let max_tensor = model
+            .tensors
+            .values()
+            .map(|t| t.nelements() as usize)
+            .max()
+            .unwrap_or(1);
         let weights = vec![0.0f32; max_tensor];
 
         // Reusable per-token embedding row scratch buffer — avoids a fresh
@@ -190,7 +278,14 @@ impl InferenceEngine {
         let kv_cache = vec![0.0f32; kv_cache_size];
 
         InferenceEngine {
-            model, tokenizer, kv_cache, n_past: 0, max_seq_len, act, weights, emb_buf,
+            model,
+            tokenizer,
+            kv_cache,
+            n_past: 0,
+            max_seq_len,
+            act,
+            weights,
+            emb_buf,
             #[cfg(feature = "gpu")]
             gpu: None,
         }
@@ -214,15 +309,18 @@ impl InferenceEngine {
 
     pub fn gpu_active(&self) -> bool {
         #[cfg(feature = "gpu")]
-        { self.gpu.is_some() }
+        {
+            self.gpu.is_some()
+        }
         #[cfg(not(feature = "gpu"))]
-        { false }
+        {
+            false
+        }
     }
 
     pub fn n_embd(&self) -> usize {
         self.model.n_embd as usize
     }
-
 
     fn forward(&mut self, token_id: u32, logits: &mut [f32]) -> Result<()> {
         let n_embd = self.model.n_embd as usize;
@@ -232,7 +330,10 @@ impl InferenceEngine {
         anyhow::ensure!(s <= self.max_seq_len, "Max sequence length exceeded");
 
         let emb = {
-            let emb = self.model.tensors.get("token_embd.weight")
+            let emb = self
+                .model
+                .tensors
+                .get("token_embd.weight")
                 .or_else(|| self.model.tensors.get("tok_embeddings.weight"))
                 .or_else(|| self.model.tensors.get("gpt.embd.weight"))
                 .ok_or_else(|| anyhow::anyhow!("No token embedding tensor found"))?;
@@ -241,11 +342,14 @@ impl InferenceEngine {
             match emb.ty {
                 gguf::GgmlType::F32 => {
                     let src = bytemuck::cast_slice::<u8, f32>(&emb.data);
-                    src[token_id as usize * emb_row_size..(token_id as usize + 1) * emb_row_size].to_vec()
-                },
+                    src[token_id as usize * emb_row_size..(token_id as usize + 1) * emb_row_size]
+                        .to_vec()
+                }
                 _ => {
                     emb.dequantize_to_f32(&mut self.weights);
-                    self.weights[token_id as usize * emb_row_size..(token_id as usize + 1) * emb_row_size].to_vec()
+                    self.weights
+                        [token_id as usize * emb_row_size..(token_id as usize + 1) * emb_row_size]
+                        .to_vec()
                 }
             }
         };
@@ -270,26 +374,49 @@ impl InferenceEngine {
 
         for layer in 0..n_layers {
             forward_layer(
-                &self.model, &mut self.kv_cache, &mut self.weights,
-                self.n_past, self.max_seq_len,
+                &self.model,
+                &mut self.kv_cache,
+                &mut self.weights,
+                self.n_past,
+                self.max_seq_len,
                 layer as i64,
-                act_head, scores_h, attn_out_h, residual,
-                q_buf, k_buf, v_buf, gate_buf, up_buf,
-                #[cfg(feature = "gpu")] &mut self.gpu,
+                act_head,
+                scores_h,
+                attn_out_h,
+                residual,
+                q_buf,
+                k_buf,
+                v_buf,
+                gate_buf,
+                up_buf,
+                #[cfg(feature = "gpu")]
+                &mut self.gpu,
             );
         }
 
         {
-            let norm_w = self.model.tensors.get("output_norm.weight")
+            let norm_w = self
+                .model
+                .tensors
+                .get("output_norm.weight")
                 .or_else(|| self.model.tensors.get("norm.weight"));
             if let Some(nw) = norm_w {
                 nw.dequantize_to_f32(&mut self.weights);
-                ops::rms_norm_inplace(act_head, &self.weights[..n_embd], n_embd, 1, self.model.norm_eps);
+                ops::rms_norm_inplace(
+                    act_head,
+                    &self.weights[..n_embd],
+                    n_embd,
+                    1,
+                    self.model.norm_eps,
+                );
             }
         }
 
         {
-            let output_w = self.model.tensors.get("output.weight")
+            let output_w = self
+                .model
+                .tensors
+                .get("output.weight")
                 .or_else(|| self.model.tensors.get("token_embd.weight"));
             if let Some(ow) = output_w {
                 ow.dequantize_to_f32(&mut self.weights);
@@ -303,7 +430,13 @@ impl InferenceEngine {
         Ok(())
     }
 
-    pub fn generate(&mut self, prompt: &str, max_tokens: usize, temperature: f32, top_k: usize) -> Result<String> {
+    pub fn generate(
+        &mut self,
+        prompt: &str,
+        max_tokens: usize,
+        temperature: f32,
+        top_k: usize,
+    ) -> Result<String> {
         let (text, _) = self.generate_inner(prompt, max_tokens, temperature, top_k, true)?;
         Ok(text)
     }
@@ -313,7 +446,9 @@ impl InferenceEngine {
     /// and Jina v5 retrieval models). The KV cache is reset so the engine
     /// remains reusable for later generation or embedding calls.
     pub fn embed(&mut self, text: &str) -> Result<Vec<f32>> {
-        let tokens = self.tokenizer.encode(text, self.max_seq_len.saturating_sub(1));
+        let tokens = self
+            .tokenizer
+            .encode(text, self.max_seq_len.saturating_sub(1));
         anyhow::ensure!(!tokens.is_empty(), "failed to tokenize text for embedding");
         self.n_past = 0;
         let n_vocab = self.model.n_vocab as usize;
@@ -324,7 +459,11 @@ impl InferenceEngine {
         let n_embd = self.model.n_embd as usize;
         let mut embedding = self.act[..n_embd].to_vec();
         self.n_past = 0;
-        let norm = embedding.iter().map(|value| value * value).sum::<f32>().sqrt();
+        let norm = embedding
+            .iter()
+            .map(|value| value * value)
+            .sum::<f32>()
+            .sqrt();
         if norm > 1e-12 {
             for value in embedding.iter_mut() {
                 *value /= norm;
@@ -334,11 +473,24 @@ impl InferenceEngine {
     }
 
     /// Silent generation for benchmarking. Returns (output_text, tokens_generated).
-    pub fn generate_bench(&mut self, prompt: &str, max_tokens: usize, temperature: f32, top_k: usize) -> Result<(String, usize)> {
+    pub fn generate_bench(
+        &mut self,
+        prompt: &str,
+        max_tokens: usize,
+        temperature: f32,
+        top_k: usize,
+    ) -> Result<(String, usize)> {
         self.generate_inner(prompt, max_tokens, temperature, top_k, false)
     }
 
-    fn generate_inner(&mut self, prompt: &str, max_tokens: usize, temperature: f32, top_k: usize, verbose: bool) -> Result<(String, usize)> {
+    fn generate_inner(
+        &mut self,
+        prompt: &str,
+        max_tokens: usize,
+        temperature: f32,
+        top_k: usize,
+        verbose: bool,
+    ) -> Result<(String, usize)> {
         let input_tokens = self.tokenizer.encode(prompt, 512);
         if input_tokens.is_empty() {
             anyhow::bail!("Failed to tokenize prompt");
@@ -358,38 +510,56 @@ impl InferenceEngine {
         for _ in 0..max_tokens {
             let mut last_token;
             if temperature < 0.01 {
-                let idx = logits.iter()
+                let idx = logits
+                    .iter()
                     .enumerate()
                     .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
                     .map(|(i, _)| i)
                     .unwrap_or(0);
                 last_token = idx as u32;
             } else {
-                for l in logits.iter_mut() { *l /= temperature; }
+                for l in logits.iter_mut() {
+                    *l /= temperature;
+                }
                 if top_k > 0 && top_k < n_vocab {
-                    let mut scored: Vec<(f32, usize)> = logits.iter().enumerate().map(|(i, &v)| (v, i)).collect();
-                    scored.select_nth_unstable_by(top_k - 1, |a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+                    let mut scored: Vec<(f32, usize)> =
+                        logits.iter().enumerate().map(|(i, &v)| (v, i)).collect();
+                    scored.select_nth_unstable_by(top_k - 1, |a, b| {
+                        b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal)
+                    });
                     let threshold = scored[top_k - 1].0;
                     for v in logits.iter_mut() {
-                        if *v < threshold { *v = f32::NEG_INFINITY; }
+                        if *v < threshold {
+                            *v = f32::NEG_INFINITY;
+                        }
                     }
                 }
                 let maxv = logits.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
                 let mut sum = 0.0;
-                for l in logits.iter_mut() { *l = (*l - maxv).exp(); sum += *l; }
+                for l in logits.iter_mut() {
+                    *l = (*l - maxv).exp();
+                    sum += *l;
+                }
                 let inv = 1.0 / sum;
-                for l in logits.iter_mut() { *l *= inv; }
+                for l in logits.iter_mut() {
+                    *l *= inv;
+                }
 
                 let r: f32 = rng.gen();
                 let mut cum = 0.0;
                 last_token = (n_vocab - 1) as u32;
                 for (j, &v) in logits.iter().enumerate() {
                     cum += v;
-                    if r < cum { last_token = j as u32; break; }
+                    if r < cum {
+                        last_token = j as u32;
+                        break;
+                    }
                 }
             }
 
-            if last_token == self.tokenizer.eos_id { break; }
+            if last_token == self.tokenizer.eos_id {
+                break;
+            }
             let piece = self.tokenizer.decode(&[last_token]);
             output.push_str(&piece);
             tokens_generated += 1;
@@ -400,7 +570,9 @@ impl InferenceEngine {
             }
             self.forward(last_token, &mut logits)?;
         }
-        if verbose { println!(); }
+        if verbose {
+            println!();
+        }
         Ok((output, tokens_generated))
     }
 }

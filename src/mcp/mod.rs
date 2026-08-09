@@ -1,6 +1,8 @@
 use anyhow::{Context, Result};
 use serde_json::Value;
 use std::io::{BufRead, BufReader, Write};
+
+pub mod server;
 use std::process::{Command, Stdio};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,8 +31,14 @@ impl McpClient {
             cmd.env(key, value);
         }
         let mut process = cmd.spawn().context("failed to spawn MCP server")?;
-        let stdin = process.stdin.take().context("failed to get MCP server stdin")?;
-        let stdout = process.stdout.take().context("failed to get MCP server stdout")?;
+        let stdin = process
+            .stdin
+            .take()
+            .context("failed to get MCP server stdin")?;
+        let stdout = process
+            .stdout
+            .take()
+            .context("failed to get MCP server stdout")?;
         let mut client = Self {
             process,
             stdin,

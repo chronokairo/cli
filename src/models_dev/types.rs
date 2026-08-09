@@ -1,5 +1,5 @@
-use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// Top-level catalog: provider_id → Provider
 pub type Catalog = HashMap<String, Provider>;

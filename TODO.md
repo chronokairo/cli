@@ -390,6 +390,36 @@ Recomendações da comparação com `codex-rs` (openai/codex). NÃO copiar o wor
 
 ---
 
+## Vision Gap Analysis (2026-08-08)
+
+> Comparação do documento de visão (README/vision) com o código real. Inventários: `docs/explore-report-01-llm-routing-inference.md`, `docs/explore-report-02-context-memory-caching.md`, `docs/explore-report-03-agent-tools-validation-security.md`. Síntese: `docs/gap-analysis-vision-2026-08.md`. Log: ADR 0016.
+
+### Contexto
+
+O código atual é um harness completo e funcional, mas várias capacidades da visão estão ausentes, parciais ou desacopladas do runtime. Principais achados:
+
+- `src/repo/context.rs` está **vazio (0 bytes)** — o "Context Engine / seleção de contexto mínimo" não existe.
+- Router roteia por **model-id apenas** (`router.rs:213-225`); **sem classificação de tarefa** (determinístico → local → remoto).
+- Custo é precificado/rastreado por turno (`turn_cost_usd`) mas **nunca é input de roteamento**.
+- `hw_recommend` funciona mas é **CLI/bench-only e Linux-only**; nunca consultado pelo router.
+- `FallbackChain`/`CircuitBreaker` construídos (`provider_chain.rs:316`) mas **conectados apenas a benchmarks**; sem escalada local→remoto no runtime.
+- Memória categorizada (architecture/decisions/conventions/failures/fixes/dependencies/summaries) **não existe**; `save_decision` (`log.rs:375`) sem call sites; sem tool `memory_save`.
+- Caching da visão (repo analysis, symbol indexes, file summaries, embeddings, test results, error classifications, model responses, context selections) **ausente** — só o catálogo models.dev é cacheado.
+- Tree-sitter/LSP ausentes (indexação por regex); sem file summaries; layer2 de compressão é dead code.
+- Sem confidence scoring, complexity estimation, ou métricas por tarefa persistidas (route/model/latency/validation/files_changed).
+- MCP server expõe apenas `run_coder` e **auto-aprova tudo** (`mcp/server.rs:93-100`).
+- Segurança: forte em containment/aprovação; mas `allowed_commands` default `"*"`, `token_escapes_workspace` falha em traversal relativa (`rm ../../x`), sem sandbox/audit log.
+
+### Top 5 prioridades para fechar o gap
+
+1. Implementar `repo/context.rs` — seleção de contexto mínimo + persistir repo map / symbol cache.
+2. Classificador de tarefas → roteamento determinístico / local / remoto.
+3. Conectar `FallbackChain` / escalada ao router do runtime (local→remoto, remoto→local).
+4. Custo como sinal de roteamento + persistência de métricas por tarefa.
+5. Memória categorizada (decisions/failures/fixes) com tool `memory_save`.
+
+---
+
 ## Status Summary (as of 2026-08-02)
 
 ### Fixed (from previous TODOs)

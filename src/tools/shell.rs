@@ -70,11 +70,43 @@ fn executable_name(cmd: &str) -> Option<String> {
 /// to the workspace-containment gate (`block_workspace_escape`).
 fn mutation_executables() -> &'static [&'static str] {
     &[
-        "rm", "rmdir", "mv", "cp", "ln", "mkdir", "md", "install", "truncate", "dd", "shred",
-        "chmod", "chown", "touch", "tee", "vi", "vim", "nano", "ed",
-        "del", "erase", "deltree", "rd", "ren", "rename", "move", "copy", "xcopy",
-        "attrib", "takeown", "icacls", "sc", "reg", "wmic",
-        "powershell", "pwsh", "cmd",
+        "rm",
+        "rmdir",
+        "mv",
+        "cp",
+        "ln",
+        "mkdir",
+        "md",
+        "install",
+        "truncate",
+        "dd",
+        "shred",
+        "chmod",
+        "chown",
+        "touch",
+        "tee",
+        "vi",
+        "vim",
+        "nano",
+        "ed",
+        "del",
+        "erase",
+        "deltree",
+        "rd",
+        "ren",
+        "rename",
+        "move",
+        "copy",
+        "xcopy",
+        "attrib",
+        "takeown",
+        "icacls",
+        "sc",
+        "reg",
+        "wmic",
+        "powershell",
+        "pwsh",
+        "cmd",
     ]
 }
 
@@ -169,7 +201,11 @@ pub fn is_allowed(cmd: &str, config: &Config) -> bool {
     // Check blocked commands for forbidden operations (e.g. rm -rf /, format, sudo reboot)
     for blocked in &config.blocked_commands {
         let b = blocked.to_lowercase();
-        if exe_lower == b || cmd_lower.contains(&b) || exe_lower.starts_with(&format!("{b}/")) || exe_lower.starts_with(&format!("{b}\\")) {
+        if exe_lower == b
+            || cmd_lower.contains(&b)
+            || exe_lower.starts_with(&format!("{b}/"))
+            || exe_lower.starts_with(&format!("{b}\\"))
+        {
             return false;
         }
     }
@@ -480,8 +516,7 @@ mod tests {
             .parent()
             .unwrap_or(std::path::Path::new("/"))
             .to_path_buf();
-        cfg.path_allowlist
-            .push(outside.display().to_string());
+        cfg.path_allowlist.push(outside.display().to_string());
         let target = outside.join("anamnesic_bash_subdir");
         assert!(is_allowed(&format!("mkdir {}", target.display()), &cfg));
     }

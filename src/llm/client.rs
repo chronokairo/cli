@@ -275,6 +275,15 @@ pub enum LlmClient {
     Cloud(CloudClient),
 }
 
+/// Coarse backend kind used by the task router (e.g. the in-process GGUF
+/// engine cannot call tools, while Ollama can).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClientKind {
+    Ollama,
+    Local,
+    Cloud,
+}
+
 impl Clone for LlmClient {
     fn clone(&self) -> Self {
         match self {
@@ -288,6 +297,15 @@ impl Clone for LlmClient {
 impl LlmClient {
     pub fn ollama(host: &str) -> Self {
         LlmClient::Ollama(OllamaClient::new(host))
+    }
+
+    /// The backend kind of this client.
+    pub fn kind(&self) -> ClientKind {
+        match self {
+            LlmClient::Ollama(_) => ClientKind::Ollama,
+            LlmClient::Local(_) => ClientKind::Local,
+            LlmClient::Cloud(_) => ClientKind::Cloud,
+        }
     }
 
     pub fn local(engine: InferenceEngine) -> Self {
@@ -374,8 +392,15 @@ impl LlmClient {
             }
             LlmClient::Cloud(c) => {
                 let messages = vec![serde_json::json!({ "role": "user", "content": prompt })];
-                c.stream_chat(model, messages, tools, response_format, on_token, on_tool_call_delta)
-                    .await
+                c.stream_chat(
+                    model,
+                    messages,
+                    tools,
+                    response_format,
+                    on_token,
+                    on_tool_call_delta,
+                )
+                .await
             }
             LlmClient::Local(eng) => {
                 let mut eng = eng
@@ -465,8 +490,16 @@ impl LlmClient {
     ) -> Result<ChatCompletion> {
         match self {
             LlmClient::Cloud(c) => {
-                c.stream_chat_meta(model, messages, tools, tool_choice, response_format, on_token, on_reasoning)
-                    .await
+                c.stream_chat_meta(
+                    model,
+                    messages,
+                    tools,
+                    tool_choice,
+                    response_format,
+                    on_token,
+                    on_reasoning,
+                )
+                .await
             }
             LlmClient::Ollama(c) => {
                 c.chat_meta_stream(
@@ -825,15 +858,10 @@ impl OllamaClient {
                             }
                             reasoning_content.push_str(reasoning);
                         }
-                        if let Some(tcs) = msg
-                            .get("tool_calls")
-                            .and_then(|t| t.as_array())
-                        {
+                        if let Some(tcs) = msg.get("tool_calls").and_then(|t| t.as_array()) {
                             for tc in tcs {
-                                let index = tc
-                                    .get("index")
-                                    .and_then(|v| v.as_u64())
-                                    .unwrap_or(0) as usize;
+                                let index =
+                                    tc.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
                                 while tool_calls.len() <= index {
                                     tool_calls.push(ToolCall {
                                         id: String::new(),
@@ -1087,8 +1115,10 @@ impl CloudClient {
             let status = resp.status();
             let status_code = status.as_u16();
             let text = resp.text().await.unwrap_or_default();
-            let retryable =
-                status_code == 429 || status_code == 500 || status_code == 502 || status_code == 503;
+            let retryable = status_code == 429
+                || status_code == 500
+                || status_code == 502
+                || status_code == 503;
 
             if retryable && attempt < MAX_RETRIES {
                 let backoff_ms = match status_code {
@@ -1102,9 +1132,7 @@ impl CloudClient {
                     backoff_ms
                 );
                 tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
-                last_err = Some(anyhow::anyhow!(
-                    "cloud chat: HTTP {status} {text}"
-                ));
+                last_err = Some(anyhow::anyhow!("cloud chat: HTTP {status} {text}"));
                 continue;
             }
 
@@ -1182,9 +1210,17 @@ impl CloudClient {
                         }
                         if let Some(tcs) = delta.get("tool_calls").and_then(|t| t.as_array()) {
                             for tc in tcs {
-                                let index = tc.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
-                                let name = tc.get("function").and_then(|f| f.get("name")).and_then(|v| v.as_str());
-                                let args = tc.get("function").and_then(|f| f.get("arguments")).and_then(|v| v.as_str()).unwrap_or("");
+                                let index =
+                                    tc.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+                                let name = tc
+                                    .get("function")
+                                    .and_then(|f| f.get("name"))
+                                    .and_then(|v| v.as_str());
+                                let args = tc
+                                    .get("function")
+                                    .and_then(|f| f.get("arguments"))
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("");
                                 if !args.is_empty() {
                                     on_tool_call_delta(index, name, args);
                                 }
@@ -1301,10 +1337,9 @@ impl CloudClient {
                             }
                             if let Some(tcs) = delta.get("tool_calls").and_then(|t| t.as_array()) {
                                 for tc in tcs {
-                                    let index = tc
-                                        .get("index")
-                                        .and_then(|v| v.as_u64())
-                                        .unwrap_or(0) as usize;
+                                    let index =
+                                        tc.get("index").and_then(|v| v.as_u64()).unwrap_or(0)
+                                            as usize;
                                     while tool_calls.len() <= index {
                                         tool_calls.push(ToolCall {
                                             id: String::new(),
@@ -1351,11 +1386,13 @@ impl CloudClient {
                             completion_tokens: u
                                 .get("completion_tokens")
                                 .and_then(|x| x.as_u64())
-                                .unwrap_or(0) as usize,
+                                .unwrap_or(0)
+                                as usize,
                             reasoning_tokens: u
                                 .get("reasoning_tokens")
                                 .and_then(|x| x.as_u64())
-                                .unwrap_or(0) as usize,
+                                .unwrap_or(0)
+                                as usize,
                             total_tokens: u
                                 .get("total_tokens")
                                 .and_then(|x| x.as_u64())
@@ -1527,15 +1564,14 @@ mod tests {
         assert_eq!(v["tools"][0]["function"]["name"], "run_command");
     }
 
-#[tokio::test]
+    #[tokio::test]
     async fn stream_chat_meta_parses_sse_content_deltas() {
         let mock = wiremock::MockServer::start().await;
         wiremock::Mock::given(wiremock::matchers::method("POST"))
             .and(wiremock::matchers::path("/chat/completions"))
-            .respond_with(wiremock::ResponseTemplate::new(200)
-                .set_body_string(
-                    "data: {\"choices\":[{\"delta\":{\"content\":\"Hello\"}}]}\r\ndata: [DONE]\r\n",
-                ))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_string(
+                "data: {\"choices\":[{\"delta\":{\"content\":\"Hello\"}}]}\r\ndata: [DONE]\r\n",
+            ))
             .mount(&mock)
             .await;
 

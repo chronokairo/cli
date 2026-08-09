@@ -1,4 +1,4 @@
-pub mod model_bench;
+pub mod cloud;
 pub mod display;
 pub mod local;
-pub mod cloud;
+pub mod model_bench;

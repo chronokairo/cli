@@ -45,8 +45,8 @@ impl GlobalSettings {
         if !path.exists() {
             return Ok(Self::default());
         }
-        let text = fs::read_to_string(&path)
-            .with_context(|| format!("reading {}", path.display()))?;
+        let text =
+            fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
         serde_json::from_str(&text).context("parsing settings.json")
     }
 
@@ -54,8 +54,7 @@ impl GlobalSettings {
     pub fn save(&self) -> Result<()> {
         let path = Self::path();
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("creating {}", parent.display()))?;
+            fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
         }
         #[cfg(unix)]
         {
@@ -63,8 +62,7 @@ impl GlobalSettings {
             let _ = fs::set_permissions(parent, fs::Permissions::from_mode(0o700));
         }
         let text = serde_json::to_string_pretty(self).context("serialising settings")?;
-        fs::write(&path, text)
-            .with_context(|| format!("writing {}", path.display()))?;
+        fs::write(&path, text).with_context(|| format!("writing {}", path.display()))?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -106,10 +104,21 @@ mod tests {
         s.set_env("NVIDIA_API_KEY", "nvapi-test-key");
         s.save().unwrap();
         let loaded = GlobalSettings::load();
-        assert_eq!(loaded.env.get("NVIDIA_API_KEY").map(String::as_str), Some("nvapi-test-key"));
+        assert_eq!(
+            loaded.env.get("NVIDIA_API_KEY").map(String::as_str),
+            Some("nvapi-test-key")
+        );
         let path = GlobalSettings::path();
-        let parent_name = path.parent().unwrap().file_name().unwrap().to_string_lossy();
-        assert!(parent_name.contains("anamnesic"), "unexpected parent {parent_name}");
+        let parent_name = path
+            .parent()
+            .unwrap()
+            .file_name()
+            .unwrap()
+            .to_string_lossy();
+        assert!(
+            parent_name.contains("anamnesic"),
+            "unexpected parent {parent_name}"
+        );
 
         let _ = fs::remove_dir_all(&tmp);
         match prev_home {

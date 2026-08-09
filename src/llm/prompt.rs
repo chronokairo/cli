@@ -90,7 +90,11 @@ mod tests {
     fn loads_project_context_from_workspace() {
         let temp = std::env::temp_dir().join(format!("test_agents_md_{}", std::process::id()));
         std::fs::create_dir_all(&temp).unwrap();
-        std::fs::write(temp.join("AGENTS.md"), "# Rules\nRule 1: Always check tests").unwrap();
+        std::fs::write(
+            temp.join("AGENTS.md"),
+            "# Rules\nRule 1: Always check tests",
+        )
+        .unwrap();
 
         let ctx = CoderPrompt::load_project_context(&temp);
         assert!(ctx.contains("AGENTS.md"));
@@ -108,7 +112,10 @@ mod tests {
         let prompt = PlannerPrompt::system();
         assert!(prompt.contains("JSON plan"), "missing JSON plan section");
         assert!(prompt.contains("Step types:"), "missing step types");
-        assert!(prompt.contains("Output JSON format:"), "missing output format");
+        assert!(
+            prompt.contains("Output JSON format:"),
+            "missing output format"
+        );
     }
 
     #[test]

@@ -164,10 +164,18 @@ impl PagerOverlay {
     }
 
     fn render_header(&self, area: Rect, buf: &mut Buffer) {
-        Span::from(format!("/ {}", self.title)).dim().render(area, buf);
+        Span::from(format!("/ {}", self.title))
+            .dim()
+            .render(area, buf);
     }
 
-    fn render_bottom_bar(&self, area: Rect, content_area: Rect, buf: &mut Buffer, total_len: usize) {
+    fn render_bottom_bar(
+        &self,
+        area: Rect,
+        content_area: Rect,
+        buf: &mut Buffer,
+        total_len: usize,
+    ) {
         let sep_y = content_area.bottom();
         let sep_rect = Rect::new(area.x, sep_y, area.width, 1);
         Span::from("─".repeat(sep_rect.width as usize))
@@ -279,7 +287,8 @@ mod tests {
     fn scroll_offset_is_clamped_to_content() {
         let mut pager = pager_over_20_lines();
         let mut term = Terminal::new(TestBackend::new(40, 10)).unwrap();
-        term.draw(|f| pager.render(f.area(), f.buffer_mut())).unwrap();
+        term.draw(|f| pager.render(f.area(), f.buffer_mut()))
+            .unwrap();
         // 20 wrapped lines in a 5-row content area.
         let max_scroll = pager.content_height(40) - 5;
         assert_eq!(pager.scroll_offset, 0);
@@ -290,7 +299,8 @@ mod tests {
     fn renders_header_and_separator() {
         let mut pager = pager_over_20_lines();
         let mut term = Terminal::new(TestBackend::new(40, 10)).unwrap();
-        term.draw(|f| pager.render(f.area(), f.buffer_mut())).unwrap();
+        term.draw(|f| pager.render(f.area(), f.buffer_mut()))
+            .unwrap();
         let text = buffer_text(&mut term);
         assert!(text.contains("/ T E S T"));
         assert!(text.contains("─────"));
@@ -305,7 +315,8 @@ mod tests {
             "T E S T".to_string(),
         );
         let mut term = Terminal::new(TestBackend::new(40, 10)).unwrap();
-        term.draw(|f| pager.render(f.area(), f.buffer_mut())).unwrap();
+        term.draw(|f| pager.render(f.area(), f.buffer_mut()))
+            .unwrap();
         assert_eq!(pager.scroll_offset, pager.content_height(40) - 5);
     }
 
@@ -313,6 +324,7 @@ mod tests {
     fn empty_content_renders_without_panic() {
         let mut pager = PagerOverlay::new(vec![], "EMPTY".to_string());
         let mut term = Terminal::new(TestBackend::new(20, 8)).unwrap();
-        term.draw(|f| pager.render(f.area(), f.buffer_mut())).unwrap();
+        term.draw(|f| pager.render(f.area(), f.buffer_mut()))
+            .unwrap();
     }
 }

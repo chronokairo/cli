@@ -16,7 +16,10 @@ pub struct TodoItem {
 
 impl TodoItem {
     pub fn new(text: impl Into<String>) -> Self {
-        Self { text: text.into(), done: false }
+        Self {
+            text: text.into(),
+            done: false,
+        }
     }
 }
 
@@ -63,8 +66,7 @@ pub struct AgentState {
 
 impl AgentState {
     pub fn new(mut config: Config) -> anyhow::Result<Self> {
-        config.workspace_dir =
-            crate::tools::fs::normalize_workspace_path(&config.workspace_dir);
+        config.workspace_dir = crate::tools::fs::normalize_workspace_path(&config.workspace_dir);
         let long_memory = LongTermMemory::new(config.memory_dir.join("memory.db"))?;
         let embedder = crate::llm::embedder::Embedder::new();
         let mut skills = crate::skills::SkillRegistry::new();
@@ -276,9 +278,9 @@ impl AgentState {
             }
             match self.embedder.embed(content, EmbedKind::Passage) {
                 Ok(embedding) => {
-                    if let Err(error) =
-                        self.long_memory
-                            .store_vector(session_id, &workspace, content, &embedding)
+                    if let Err(error) = self
+                        .long_memory
+                        .store_vector(session_id, &workspace, content, &embedding)
                     {
                         log::debug!("memory indexing store failed: {error}");
                     }
@@ -326,7 +328,12 @@ impl AgentState {
             .find(|(role, content)| {
                 role == "system" && content.starts_with("[Session summary so far]")
             })
-            .map(|(_, content)| content.trim_start_matches("[Session summary so far]").trim().to_string());
+            .map(|(_, content)| {
+                content
+                    .trim_start_matches("[Session summary so far]")
+                    .trim()
+                    .to_string()
+            });
         self.session_id = Some(id);
         Ok(self.session.history().len())
     }
@@ -441,7 +448,14 @@ mod tests {
         // Parent session untouched.
         state.session.add_message("user", "parent");
         state.persist_session().unwrap();
-        assert_eq!(state.long_memory.load_session(state.session_id.unwrap()).unwrap().len(), 1);
+        assert_eq!(
+            state
+                .long_memory
+                .load_session(state.session_id.unwrap())
+                .unwrap()
+                .len(),
+            1
+        );
         let _ = fs::remove_dir_all(state.config.workspace_dir.parent().unwrap());
     }
 }

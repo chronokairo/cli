@@ -18,7 +18,10 @@ use crate::tools::shell;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TaskStatus {
     Running,
-    Done { exit_code: Option<i32>, timed_out: bool },
+    Done {
+        exit_code: Option<i32>,
+        timed_out: bool,
+    },
 }
 
 #[derive(Debug)]
@@ -39,7 +42,9 @@ pub struct BackgroundTaskManager {
 
 impl BackgroundTaskManager {
     pub fn new() -> Self {
-        Self { inner: Arc::new(Mutex::new(BTreeMap::new())) }
+        Self {
+            inner: Arc::new(Mutex::new(BTreeMap::new())),
+        }
     }
 
     /// Spawn `command` detached. Returns the new task id, or an error message
@@ -156,7 +161,11 @@ impl BackgroundTaskManager {
         let map = self.inner.lock().unwrap();
         let task = map.get(id)?;
         let guard = task.lock().unwrap();
-        Some((guard.status.clone(), render_output(&guard), guard.started_at.elapsed()))
+        Some((
+            guard.status.clone(),
+            render_output(&guard),
+            guard.started_at.elapsed(),
+        ))
     }
 
     pub fn list(&self) -> Vec<(String, String, String)> {
@@ -169,7 +178,10 @@ impl BackgroundTaskManager {
                     g.command.clone(),
                     match g.status {
                         TaskStatus::Running => "running".into(),
-                        TaskStatus::Done { exit_code, timed_out } => {
+                        TaskStatus::Done {
+                            exit_code,
+                            timed_out,
+                        } => {
                             if let Some(code) = exit_code {
                                 format!("done (exit {code})")
                             } else if timed_out {
@@ -194,7 +206,10 @@ impl BackgroundTaskManager {
         if let Some(child) = guard.child.as_mut() {
             let _ = child.kill();
         }
-        guard.status = TaskStatus::Done { exit_code: None, timed_out: false };
+        guard.status = TaskStatus::Done {
+            exit_code: None,
+            timed_out: false,
+        };
         true
     }
 }
@@ -211,7 +226,8 @@ fn read_pipe<R: Read>(mut pipe: R) -> String {
     String::from_utf8_lossy(&bytes).into_owned()
 }
 
-fn render_output(inner: &Inner) -> String {    let mut out = inner.stdout.clone();
+fn render_output(inner: &Inner) -> String {
+    let mut out = inner.stdout.clone();
     if !inner.stderr.is_empty() {
         if !out.is_empty() {
             out.push('\n');

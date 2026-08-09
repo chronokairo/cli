@@ -20,7 +20,11 @@ pub use context::GpuContext;
 /// Returns true only when the gpu feature is enabled and a GPU is found.
 pub fn is_available() -> bool {
     #[cfg(feature = "gpu")]
-    { context::probe_gpu().is_some() }
+    {
+        context::probe_gpu().is_some()
+    }
     #[cfg(not(feature = "gpu"))]
-    { false }
+    {
+        false
+    }
 }

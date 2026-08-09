@@ -1,6 +1,6 @@
-use std::path::{Path, PathBuf};
-use rusqlite::Connection;
 use chrono::Local;
+use rusqlite::Connection;
+use std::path::{Path, PathBuf};
 
 /// Summary metadata for a saved conversation, shown in the resume picker.
 #[derive(Debug, Clone)]
@@ -63,10 +63,13 @@ impl LongTermMemory {
                 created_at TEXT,
                 embedding BLOB NOT NULL
             );
-            CREATE INDEX IF NOT EXISTS idx_memory_vectors_session ON memory_vectors(session_id);"
+            CREATE INDEX IF NOT EXISTS idx_memory_vectors_session ON memory_vectors(session_id);",
         )?;
         Self::migrate_sessions_table(&conn)?;
-        Ok(LongTermMemory { conn, path: db_path })
+        Ok(LongTermMemory {
+            conn,
+            path: db_path,
+        })
     }
 
     /// Add metadata columns that older session rows lack. Applies only to the
@@ -96,7 +99,9 @@ impl LongTermMemory {
                 continue;
             }
             let alter = || {
-                conn.execute_batch(&format!("ALTER TABLE sessions ADD COLUMN {name} {definition};"))
+                conn.execute_batch(&format!(
+                    "ALTER TABLE sessions ADD COLUMN {name} {definition};"
+                ))
             };
             match alter() {
                 Ok(()) => columns.push(name.to_string()),
@@ -176,13 +181,7 @@ impl LongTermMemory {
                 updated_at = ?4,
                 message_count = (SELECT COUNT(*) FROM session_messages WHERE session_id = ?5)
              WHERE id = ?5",
-            rusqlite::params![
-                title,
-                context,
-                model,
-                Local::now().to_rfc3339(),
-                session_id
-            ],
+            rusqlite::params![title, context, model, Local::now().to_rfc3339(), session_id],
         )?;
         Ok(())
     }
@@ -204,26 +203,16 @@ impl LongTermMemory {
         self.conn.execute(
             "INSERT INTO memory_vectors (session_id, text, source, created_at, embedding)
              VALUES (?1, ?2, ?3, ?4, ?5)",
-            rusqlite::params![
-                session_id,
-                text,
-                source,
-                Local::now().to_rfc3339(),
-                blob
-            ],
+            rusqlite::params![session_id, text, source, Local::now().to_rfc3339(), blob],
         )?;
         Ok(())
     }
 
     /// Top-`k` vectors most similar to the (normalized) query embedding.
-    pub fn search_vectors(
-        &self,
-        query: &[f32],
-        k: usize,
-    ) -> anyhow::Result<Vec<VectorHit>> {
-        let mut stmt =
-            self.conn
-                .prepare("SELECT text, source, embedding FROM memory_vectors")?;
+    pub fn search_vectors(&self, query: &[f32], k: usize) -> anyhow::Result<Vec<VectorHit>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT text, source, embedding FROM memory_vectors")?;
         let rows = stmt.query_map([], |row| {
             Ok((
                 row.get::<_, String>(0)?,
@@ -250,7 +239,11 @@ impl LongTermMemory {
         Ok(hits
             .into_iter()
             .take(k.clamp(1, 50))
-            .map(|(score, text, source)| VectorHit { text, source, score })
+            .map(|(score, text, source)| VectorHit {
+                text,
+                source,
+                score,
+            })
             .collect())
     }
 
@@ -287,9 +280,7 @@ impl LongTermMemory {
              WHERE workspace = ?1 AND status = 'active' AND message_count > 0
              ORDER BY updated_at DESC LIMIT 1",
         )?;
-        let mut rows = stmt.query_map(rusqlite::params![workspace], |row| {
-            row.get::<_, i64>(0)
-        })?;
+        let mut rows = stmt.query_map(rusqlite::params![workspace], |row| row.get::<_, i64>(0))?;
         Ok(rows.next().transpose()?)
     }
 
@@ -314,10 +305,11 @@ impl LongTermMemory {
 
     /// Stored compaction context for a session, if any.
     pub fn session_context(&self, session_id: i64) -> anyhow::Result<Option<String>> {
-        let mut stmt = self.conn.prepare("SELECT context FROM sessions WHERE id = ?1")?;
-        let mut rows = stmt.query_map(rusqlite::params![session_id], |row| {
-            row.get::<_, String>(0)
-        })?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT context FROM sessions WHERE id = ?1")?;
+        let mut rows =
+            stmt.query_map(rusqlite::params![session_id], |row| row.get::<_, String>(0))?;
         Ok(rows.next().transpose()?.filter(|s| !s.trim().is_empty()))
     }
 
@@ -392,7 +384,8 @@ mod tests {
     use super::*;
 
     fn temp_memory(tag: &str) -> LongTermMemory {
-        let dir = std::env::temp_dir().join(format!("anamnesic-memory-log-{tag}-{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("anamnesic-memory-log-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         LongTermMemory::new(dir.join("memory.db")).unwrap()
     }
@@ -432,7 +425,8 @@ mod tests {
         let loaded = m.load_session(id).unwrap();
         assert_eq!(loaded.len(), 1);
         // A new seq appends.
-        m.append_messages(id, &[(1i64, "assistant".to_string(), "hi".to_string())]).unwrap();
+        m.append_messages(id, &[(1i64, "assistant".to_string(), "hi".to_string())])
+            .unwrap();
         assert_eq!(m.load_session(id).unwrap().len(), 2);
     }
 
@@ -440,9 +434,11 @@ mod tests {
     fn sessions_are_scoped_by_workspace() {
         let m = temp_memory("scope");
         let a = m.start_session("/ws/a", "m").unwrap();
-        m.append_messages(a, &[(0, "user".into(), "x".into())]).unwrap();
+        m.append_messages(a, &[(0, "user".into(), "x".into())])
+            .unwrap();
         let b = m.start_session("/ws/b", "m").unwrap();
-        m.append_messages(b, &[(0, "user".into(), "y".into())]).unwrap();
+        m.append_messages(b, &[(0, "user".into(), "y".into())])
+            .unwrap();
         let list_a = m.list_sessions("/ws/a", 10).unwrap();
         assert_eq!(list_a.len(), 1);
         assert_eq!(list_a[0].id, a);
@@ -456,7 +452,8 @@ mod tests {
         let id = m.start_session("/tmp/ws", "m").unwrap();
         assert!(m.list_sessions("/tmp/ws", 10).unwrap().is_empty());
         assert_eq!(m.latest_session("/tmp/ws").unwrap(), None);
-        m.append_messages(id, &[(0, "user".into(), "x".into())]).unwrap();
+        m.append_messages(id, &[(0, "user".into(), "x".into())])
+            .unwrap();
         assert_eq!(m.list_sessions("/tmp/ws", 10).unwrap().len(), 1);
     }
 
@@ -464,7 +461,8 @@ mod tests {
     fn delete_removes_session_and_messages() {
         let m = temp_memory("delete");
         let id = m.start_session("/tmp/ws", "m").unwrap();
-        m.append_messages(id, &[(0, "user".into(), "x".into())]).unwrap();
+        m.append_messages(id, &[(0, "user".into(), "x".into())])
+            .unwrap();
         m.delete_session(id).unwrap();
         assert!(m.load_session(id).unwrap().is_empty());
         assert!(m.list_sessions("/tmp/ws", 10).unwrap().is_empty());

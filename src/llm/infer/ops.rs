@@ -18,9 +18,13 @@ pub fn rms_norm(out: &mut [f32], x: &[f32], weight: &[f32], n: usize, rows: usiz
     for r in 0..rows {
         let offset = r * n;
         let mut ss = 0.0f32;
-        for i in 0..n { ss += x[offset + i] * x[offset + i]; }
+        for i in 0..n {
+            ss += x[offset + i] * x[offset + i];
+        }
         let s = 1.0 / (ss / n as f32 + eps).sqrt();
-        for i in 0..n { out[offset + i] = x[offset + i] * s * weight[i]; }
+        for i in 0..n {
+            out[offset + i] = x[offset + i] * s * weight[i];
+        }
     }
 }
 
@@ -28,18 +32,26 @@ pub fn rms_norm_inplace(x: &mut [f32], weight: &[f32], n: usize, rows: usize, ep
     for r in 0..rows {
         let offset = r * n;
         let mut ss = 0.0f32;
-        for i in 0..n { ss += x[offset + i] * x[offset + i]; }
+        for i in 0..n {
+            ss += x[offset + i] * x[offset + i];
+        }
         let s = 1.0 / (ss / n as f32 + eps).sqrt();
-        for i in 0..n { x[offset + i] = x[offset + i] * s * weight[i]; }
+        for i in 0..n {
+            x[offset + i] = x[offset + i] * s * weight[i];
+        }
     }
 }
 
 pub fn silu(out: &mut [f32], x: &[f32], n: usize) {
-    for i in 0..n { out[i] = x[i] / (1.0 + (-x[i]).exp()); }
+    for i in 0..n {
+        out[i] = x[i] / (1.0 + (-x[i]).exp());
+    }
 }
 
 pub fn silu_inplace(x: &mut [f32], n: usize) {
-    for v in x[..n].iter_mut() { *v = *v / (1.0 + (-*v).exp()); }
+    for v in x[..n].iter_mut() {
+        *v = *v / (1.0 + (-*v).exp());
+    }
 }
 
 pub fn matmul(dst: &mut [f32], a: &[f32], b: &[f32], m: usize, n: usize, k: usize) {
@@ -49,7 +61,9 @@ pub fn matmul(dst: &mut [f32], a: &[f32], b: &[f32], m: usize, n: usize, k: usiz
         .for_each(|(i, row)| {
             for j in 0..n {
                 let mut sum = 0.0f32;
-                for kk in 0..k { sum += a[i * k + kk] * b[kk * n + j]; }
+                for kk in 0..k {
+                    sum += a[i * k + kk] * b[kk * n + j];
+                }
                 row[j] = sum;
             }
         });
@@ -59,7 +73,7 @@ pub fn matmul(dst: &mut [f32], a: &[f32], b: &[f32], m: usize, n: usize, k: usiz
 /// This is the hot path — parallelised over output rows.
 pub fn matmul_nt(dst: &mut [f32], a: &[f32], b: &[f32], m: usize, n: usize, k: usize) {
     dst[..m * n]
-        .par_chunks_mut(n)           // one chunk per output row (m chunks total)
+        .par_chunks_mut(n) // one chunk per output row (m chunks total)
         .enumerate()
         .for_each(|(i, row)| {
             let a_row = &a[i * k..(i + 1) * k];
@@ -67,13 +81,22 @@ pub fn matmul_nt(dst: &mut [f32], a: &[f32], b: &[f32], m: usize, n: usize, k: u
                 let b_row = &b[j * k..(j + 1) * k];
                 let mut sum = 0.0f32;
                 // SIMD-friendly dot product — compiler auto-vectorises this
-                for kk in 0..k { sum += a_row[kk] * b_row[kk]; }
+                for kk in 0..k {
+                    sum += a_row[kk] * b_row[kk];
+                }
                 row[j] = sum;
             }
         });
 }
 
-pub fn rope(x: &mut [f32], n_embd: usize, n_head: usize, pos: usize, n_tokens: usize, freq_base: f32) {
+pub fn rope(
+    x: &mut [f32],
+    n_embd: usize,
+    n_head: usize,
+    pos: usize,
+    n_tokens: usize,
+    freq_base: f32,
+) {
     let head_dim = n_embd / n_head;
     for t in 0..n_tokens {
         for h in 0..n_head {
@@ -108,5 +131,7 @@ pub fn softmax(x: &mut [f32], n: usize, rows: usize) {
 }
 
 pub fn add(dst: &mut [f32], a: &[f32], b: &[f32], n: usize) {
-    for i in 0..n { dst[i] = a[i] + b[i]; }
+    for i in 0..n {
+        dst[i] = a[i] + b[i];
+    }
 }

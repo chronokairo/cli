@@ -3,12 +3,7 @@ use crate::llm::router::LlmRouter;
 use crate::types::plan::{Plan, PlanStep};
 use anyhow::Result;
 
-pub async fn plan_task(
-    client: &LlmRouter,
-    model: &str,
-    task: &str,
-    context: &str,
-) -> Result<Plan> {
+pub async fn plan_task(client: &LlmRouter, model: &str, task: &str, context: &str) -> Result<Plan> {
     let system = PlannerPrompt::system();
     let prompt = format!("{}\n\nContext:\n{}\n\nTask:\n{}", system, context, task);
     let response = client

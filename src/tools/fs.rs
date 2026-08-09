@@ -53,7 +53,9 @@ pub fn normalize_workspace_path(path: &Path) -> PathBuf {
         }
     };
     if cleaned.is_absolute() {
-        cleaned.canonicalize().unwrap_or_else(|_| normalize(&cleaned))
+        cleaned
+            .canonicalize()
+            .unwrap_or_else(|_| normalize(&cleaned))
     } else {
         let absolute = std::env::current_dir()
             .unwrap_or_else(|_| PathBuf::from("."))
@@ -154,7 +156,9 @@ mod tests {
             return;
         }
         let tools = FileTools::new(workspace.clone());
-        assert!(tools.read_file("link/evil/system32/drivers/etc/hosts").is_none());
+        assert!(tools
+            .read_file("link/evil/system32/drivers/etc/hosts")
+            .is_none());
         assert!(tools.write_file("link/evil/newfile", "x").is_err());
         assert!(!std::path::Path::new(r"C:\Windows\newfile").exists());
     }
@@ -162,8 +166,12 @@ mod tests {
     #[test]
     fn rejects_deep_path_traversal_and_injection_strings() {
         let tools = FileTools::new(temp_workspace());
-        assert!(tools.read_file("../../../../../../../../etc/passwd").is_none());
-        assert!(tools.write_file("foo/../../../../outside.txt", "data").is_err());
+        assert!(tools
+            .read_file("../../../../../../../../etc/passwd")
+            .is_none());
+        assert!(tools
+            .write_file("foo/../../../../outside.txt", "data")
+            .is_err());
         assert!(tools.read_file("foo; rm -rf /").is_none());
     }
 
@@ -203,7 +211,10 @@ mod tests {
         tools.write_file("sub/b.txt", "b").unwrap();
         let root = tools.list_files("");
         assert!(root.contains(&"a.txt".to_string()));
-        assert!(root.contains(&"sub/".to_string()), "directories should appear with trailing /");
+        assert!(
+            root.contains(&"sub/".to_string()),
+            "directories should appear with trailing /"
+        );
         assert_eq!(tools.list_files("sub"), vec!["sub/b.txt"]);
     }
 
@@ -219,7 +230,10 @@ mod tests {
         let tree = tools.list_tree("", 2, 50).unwrap();
         assert!(tree.contains("verbatim-test.txt"), "tree: {tree}");
         let files = tools.list_files("");
-        assert!(files.iter().any(|f| f == "verbatim-test.txt"), "files: {files:?}");
+        assert!(
+            files.iter().any(|f| f == "verbatim-test.txt"),
+            "files: {files:?}"
+        );
         let _ = std::fs::remove_file(cwd.join("verbatim-test.txt"));
     }
 
@@ -275,10 +289,8 @@ mod tests {
             "external"
         );
         // a different outside area is still blocked
-        let other = std::env::temp_dir().join(format!(
-            "anamnesic-allow-other-{}",
-            std::process::id()
-        ));
+        let other =
+            std::env::temp_dir().join(format!("anamnesic-allow-other-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&other);
         std::fs::create_dir_all(&other).unwrap();
         std::fs::write(other.join("x.txt"), "nope").unwrap();
@@ -311,7 +323,11 @@ impl FileTools {
             .map(|entry| entry.replace('\\', "/").trim_matches('/').to_string())
             .filter(|entry| !entry.is_empty())
             .collect();
-        FileTools { workspace: ws, allowlist, denylist }
+        FileTools {
+            workspace: ws,
+            allowlist,
+            denylist,
+        }
     }
 
     /// Canonicalized workspace root the tools operate inside.
@@ -364,9 +380,9 @@ impl FileTools {
         };
         let relative = relative.to_string_lossy().replace('\\', "/");
         let relative = relative.trim_matches('/');
-        self.denylist.iter().any(|entry| {
-            relative == entry || relative.starts_with(&format!("{entry}/"))
-        })
+        self.denylist
+            .iter()
+            .any(|entry| relative == entry || relative.starts_with(&format!("{entry}/")))
     }
 
     /// True when `candidate` (already known to be outside the workspace) lives
@@ -590,7 +606,10 @@ impl FileTools {
         match (start_line, end_line) {
             (Some(start), Some(end)) => {
                 if start == 0 || start > lines.len() + 1 {
-                    anyhow::bail!("start_line {start} is out of bounds (file has {} lines)", lines.len());
+                    anyhow::bail!(
+                        "start_line {start} is out of bounds (file has {} lines)",
+                        lines.len()
+                    );
                 }
                 if end < start {
                     anyhow::bail!("end_line {end} must be >= start_line {start}");
@@ -628,17 +647,15 @@ impl FileTools {
                 self.atomic_write(&target, &joined)
             }
             _ => {
-                let old = old_content.ok_or_else(|| anyhow::anyhow!("start_line/end_line or old_content must be provided"))?;
+                let old = old_content.ok_or_else(|| {
+                    anyhow::anyhow!("start_line/end_line or old_content must be provided")
+                })?;
                 self.replace_exact(path, old, new_content)
             }
         }
     }
 
-    pub fn multi_edit_file(
-        &self,
-        path: &str,
-        edits: &[MultiEdit],
-    ) -> anyhow::Result<()> {
+    pub fn multi_edit_file(&self, path: &str, edits: &[MultiEdit]) -> anyhow::Result<()> {
         if edits.is_empty() {
             anyhow::bail!("edits must not be empty");
         }
@@ -658,8 +675,10 @@ impl FileTools {
             if earlier.start_line <= later.end_line {
                 anyhow::bail!(
                     "overlapping edits are not allowed: lines {}-{} overlaps lines {}-{}",
-                    later.start_line, later.end_line,
-                    earlier.start_line, earlier.end_line
+                    later.start_line,
+                    later.end_line,
+                    earlier.start_line,
+                    earlier.end_line
                 );
             }
         }
@@ -695,8 +714,7 @@ impl FileTools {
                 }
             }
 
-            let replacement: Vec<String> =
-                edit.new_content.lines().map(String::from).collect();
+            let replacement: Vec<String> = edit.new_content.lines().map(String::from).collect();
             lines.splice(start_idx..end_idx, replacement);
         }
 
@@ -776,9 +794,22 @@ mod transactional_tests {
     fn edit_file_replaces_line_range_surgically() {
         let root = workspace("edit_range");
         let tools = FileTools::new(root.clone());
-        tools.write_file("test.py", "line 1\nline 2\nline 3\nline 4\n").unwrap();
-        tools.edit_file("test.py", Some(2), Some(3), Some("line 2\nline 3"), "NEW LINE 2AND3").unwrap();
-        assert_eq!(tools.read_file("test.py").unwrap(), "line 1\nNEW LINE 2AND3\nline 4\n");
+        tools
+            .write_file("test.py", "line 1\nline 2\nline 3\nline 4\n")
+            .unwrap();
+        tools
+            .edit_file(
+                "test.py",
+                Some(2),
+                Some(3),
+                Some("line 2\nline 3"),
+                "NEW LINE 2AND3",
+            )
+            .unwrap();
+        assert_eq!(
+            tools.read_file("test.py").unwrap(),
+            "line 1\nNEW LINE 2AND3\nline 4\n"
+        );
         let _ = fs::remove_dir_all(root);
     }
 
@@ -787,13 +818,26 @@ mod transactional_tests {
         use super::MultiEdit;
         let root = workspace("multi_edit");
         let tools = FileTools::new(root.clone());
-        tools
-            .write_file("src.rs", "a\nb\nc\nd\ne\nf\n")
-            .unwrap();
+        tools.write_file("src.rs", "a\nb\nc\nd\ne\nf\n").unwrap();
         let edits = vec![
-            MultiEdit { start_line: 1, end_line: 1, old_content: None, new_content: "A".into() },
-            MultiEdit { start_line: 3, end_line: 4, old_content: None, new_content: "C\nD2".into() },
-            MultiEdit { start_line: 6, end_line: 6, old_content: None, new_content: "F2".into() },
+            MultiEdit {
+                start_line: 1,
+                end_line: 1,
+                old_content: None,
+                new_content: "A".into(),
+            },
+            MultiEdit {
+                start_line: 3,
+                end_line: 4,
+                old_content: None,
+                new_content: "C\nD2".into(),
+            },
+            MultiEdit {
+                start_line: 6,
+                end_line: 6,
+                old_content: None,
+                new_content: "F2".into(),
+            },
         ];
         tools.multi_edit_file("src.rs", &edits).unwrap();
         assert_eq!(tools.read_file("src.rs").unwrap(), "A\nb\nC\nD2\ne\nF2\n");
@@ -807,8 +851,18 @@ mod transactional_tests {
         let tools = FileTools::new(root.clone());
         tools.write_file("src.rs", "a\nb\nc\nd\n").unwrap();
         let edits = vec![
-            MultiEdit { start_line: 2, end_line: 3, old_content: None, new_content: "x".into() },
-            MultiEdit { start_line: 3, end_line: 4, old_content: None, new_content: "y".into() },
+            MultiEdit {
+                start_line: 2,
+                end_line: 3,
+                old_content: None,
+                new_content: "x".into(),
+            },
+            MultiEdit {
+                start_line: 3,
+                end_line: 4,
+                old_content: None,
+                new_content: "y".into(),
+            },
         ];
         assert!(tools.multi_edit_file("src.rs", &edits).is_err());
         assert_eq!(tools.read_file("src.rs").unwrap(), "a\nb\nc\nd\n");

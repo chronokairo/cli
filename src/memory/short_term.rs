@@ -44,14 +44,24 @@ pub fn estimate_tokens(text: &str) -> usize {
 
 impl ShortTermMemory {
     pub fn new(max_messages: usize) -> Self {
-        ShortTermMemory { messages: VecDeque::new(), actions: Vec::new(), files: Vec::new(), summary: None, max_messages, next_seq: 0 }
+        ShortTermMemory {
+            messages: VecDeque::new(),
+            actions: Vec::new(),
+            files: Vec::new(),
+            summary: None,
+            max_messages,
+            next_seq: 0,
+        }
     }
 
     pub fn add_message(&mut self, role: &str, content: &str) {
         let seq = self.next_seq;
         self.next_seq += 1;
-        self.messages.push_back((seq, role.to_string(), content.to_string()));
-        if self.messages.len() > self.max_messages { self.messages.pop_front(); }
+        self.messages
+            .push_back((seq, role.to_string(), content.to_string()));
+        if self.messages.len() > self.max_messages {
+            self.messages.pop_front();
+        }
     }
 
     /// Restore a persisted transcript (ordered `(seq, role, content)` records).
@@ -92,12 +102,19 @@ impl ShortTermMemory {
         self.summary.as_deref()
     }
 
-    pub fn add_action(&mut self, action: &str) { self.actions.push(action.to_string()); }
+    pub fn add_action(&mut self, action: &str) {
+        self.actions.push(action.to_string());
+    }
 
     pub fn add_file(&mut self, filepath: &str) {
         if !self.files.contains(&filepath.to_string()) {
             self.files.push(filepath.to_string());
         }
+    }
+
+    /// Number of distinct files referenced by the session so far.
+    pub fn file_count(&self) -> usize {
+        self.files.len()
     }
 
     /// Full conversation transcript (messages + summary prefix).
@@ -133,14 +150,29 @@ impl ShortTermMemory {
             lines.push(format!("Session summary: {}", summary));
         }
         if let Some((_, role, content)) = self.messages.back() {
-            lines.push(format!("Last message ({role}): {}", &content[..content.len().min(200)]));
+            lines.push(format!(
+                "Last message ({role}): {}",
+                &content[..content.len().min(200)]
+            ));
         }
         if !self.actions.is_empty() {
-            let recent: Vec<&str> = self.actions.iter().rev().take(5).map(|s| s.as_str()).collect();
+            let recent: Vec<&str> = self
+                .actions
+                .iter()
+                .rev()
+                .take(5)
+                .map(|s| s.as_str())
+                .collect();
             lines.push(format!("Recent actions: {}", recent.join(", ")));
         }
         if !self.files.is_empty() {
-            let recent: Vec<&str> = self.files.iter().rev().take(10).map(|s| s.as_str()).collect();
+            let recent: Vec<&str> = self
+                .files
+                .iter()
+                .rev()
+                .take(10)
+                .map(|s| s.as_str())
+                .collect();
             lines.push(format!("Files: {}", recent.join(", ")));
         }
         lines.join("\n")
@@ -165,7 +197,10 @@ impl ShortTermMemory {
             .collect();
         if let Some(summary) = &self.summary {
             let expected = format!("[Session summary so far] {summary}");
-            if !out.iter().any(|(role, content)| role == "system" && content == &expected) {
+            if !out
+                .iter()
+                .any(|(role, content)| role == "system" && content == &expected)
+            {
                 out.insert(0, ("system".into(), expected));
             }
         }

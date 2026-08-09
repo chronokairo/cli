@@ -1,6 +1,9 @@
 use crossterm::{
     cursor::Show,
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind},
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
+        MouseButton, MouseEventKind,
+    },
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -16,13 +19,18 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::{
     error::Error,
-    io,
+    io::{self, Write},
     sync::mpsc,
     thread,
     time::{Duration, Instant},
 };
 
-use crate::agent::agent_loop::{AgentEvent, AgentHooks, ApprovalDecision, ApprovalRequest};
+use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+
+use crate::agent::agent_loop::{
+    AgentEvent, AgentHooks, ApprovalDecision, ApprovalRequest, PlanApprovalDecision,
+    PlanApprovalRequest,
+};
 use crate::agent::state::AgentState;
 use crate::config::settings::ApprovalPolicy;
 use crate::llm::router::{LlmRouter, DEFAULT_PROVIDER};
@@ -43,7 +51,10 @@ const SPINNER: [char; 8] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '�
 
 /// Available slash commands, shown in the interactive picker (modern-harness style).
 const SLASH_COMMANDS: &[(&str, &str)] = &[
-    ("/info", "Show workspace info (context, tokens, models, todo, files)"),
+    (
+        "/info",
+        "Show workspace info (context, tokens, models, todo, files)",
+    ),
     ("/help", "Show help"),
     ("/status", "Show model, provider, directory, context tokens"),
     (
@@ -57,6 +68,10 @@ const SLASH_COMMANDS: &[(&str, &str)] = &[
     ("/reset", "Reset session"),
     ("/resume", "Resume a saved session (picker)"),
     ("/continue", "Continue the most recent session"),
+    (
+        "/plan",
+        "Toggle plan mode (generate plan first, then approve before executing)",
+    ),
 ];
 
 #[derive(PartialEq)]
@@ -119,7 +134,11 @@ impl InfoPanelSection {
     }
 
     pub fn open(title: &'static str, lines: Vec<Span<'static>>) -> Self {
-        Self { title, open: true, lines }
+        Self {
+            title,
+            open: true,
+            lines,
+        }
     }
 }
 
@@ -163,6 +182,9 @@ pub struct App {
     /// Pending approval prompt (`ask` policy): the worker blocks until the
     /// user answers, but rendering and input keep running.
     pub pending_approval: Option<ApprovalRequest>,
+    /// Pending plan approval: when in Plan mode, the planner proposes steps
+    /// and waits for user approval before executing.
+    pub pending_plan_approval: Option<PlanApprovalRequest>,
     pub quit_pending: bool,
     pub token_breakdown: TokenBreakdown,
     pub max_context_tokens: usize,
@@ -289,6 +311,7 @@ impl App {
             provider_items: Vec::new(),
             provider_selected: 0,
             pending_approval: None,
+            pending_plan_approval: None,
             quit_pending: false,
             token_breakdown: TokenBreakdown {
                 input: 0,
@@ -384,7 +407,8 @@ impl App {
             }
             self.streaming_assistant = false;
         }
-        self.messages.push(("Assistant".to_string(), text.to_string()));
+        self.messages
+            .push(("Assistant".to_string(), text.to_string()));
         self.streaming_assistant = true;
     }
 
@@ -399,7 +423,8 @@ impl App {
             self.reasoning.push_str(text);
         }
         if self.reasoning.len() >= FLUSH_THRESHOLD {
-            self.messages.push(("Thinking".to_string(), self.reasoning.clone()));
+            self.messages
+                .push(("Thinking".to_string(), self.reasoning.clone()));
             self.reasoning.clear();
         }
     }
@@ -410,7 +435,8 @@ impl App {
     /// Any remaining tail (< 120 chars) is flushed to the transcript first.
     pub fn reset_reasoning(&mut self) {
         if !self.reasoning.is_empty() {
-            self.messages.push(("Thinking".to_string(), self.reasoning.clone()));
+            self.messages
+                .push(("Thinking".to_string(), self.reasoning.clone()));
             self.reasoning.clear();
         }
     }
@@ -430,7 +456,8 @@ impl App {
             match self.messages.last_mut() {
                 Some((role, _)) if role == "Assistant" => {
                     let idx = self.messages.len().saturating_sub(1);
-                    self.messages.insert(idx, ("Thinking".to_string(), reasoning));
+                    self.messages
+                        .insert(idx, ("Thinking".to_string(), reasoning));
                 }
                 Some((_, last)) => {
                     last.push_str(&reasoning);
@@ -455,7 +482,8 @@ impl App {
                 self.messages.extend(tail);
                 self.messages.push(assistant);
             } else {
-                self.messages.push(("Assistant".to_string(), content.to_string()));
+                self.messages
+                    .push(("Assistant".to_string(), content.to_string()));
             }
         }
         self.streaming_assistant = false;
@@ -553,7 +581,11 @@ fn handle_slash_command(
     match cmd {
         "/auto" => {
             let sub = input.trim_start_matches("/auto").trim();
-            let arg = if sub.is_empty() { "auto".to_string() } else { format!("auto {sub}") };
+            let arg = if sub.is_empty() {
+                "auto".to_string()
+            } else {
+                format!("auto {sub}")
+            };
             set_active_model(app, state, router, &arg, auto_test_tx);
             true
         }
@@ -637,7 +669,7 @@ fn handle_slash_command(
                 let dir = st.config.models_dir.clone();
                 drop(st);
                 // Cloud models come from the models.dev catalog for the active provider.
-let provider = app.provider.clone();
+                let provider = app.provider.clone();
                 let catalog = crate::models_dev::ModelsDevClient::load();
                 let mut cloud_ranked: Vec<(usize, String)> = catalog
                     .provider_models(&provider)
@@ -662,17 +694,17 @@ let provider = app.provider.clone();
                             }
                         }
                     })
-.map(|m| {
-                         let base = crate::models_dev::base_id(&m.id);
-                         let display = if provider == "nvidia" {
-                             ranked_model_name(&base)
-                         } else {
-                             base.clone()
-                         };
-                         (ranked_model_order(&base), display)
-                     })
+                    .map(|m| {
+                        let base = crate::models_dev::base_id(&m.id);
+                        let display = if provider == "nvidia" {
+                            ranked_model_name(&base)
+                        } else {
+                            base.clone()
+                        };
+                        (ranked_model_order(&base), display)
+                    })
                     .collect();
-cloud_ranked.sort_by_key(|(rank, _)| *rank);
+                cloud_ranked.sort_by_key(|(rank, _)| *rank);
                 let cloud: Vec<String> = cloud_ranked
                     .into_iter()
                     .map(|(_, name)| format!("{} [cloud]", name))
@@ -712,21 +744,24 @@ cloud_ranked.sort_by_key(|(rank, _)| *rank);
             let mut st = state.lock().unwrap();
             let workspace = st.config.workspace_dir.display().to_string();
             match st.long_memory.latest_session(&workspace) {
-                Ok(Some(id)) => {
-                    match st.load_session_into_state(id) {
-                        Ok(count) => {
-                            drop(st);
-                            app.messages.clear();
-                            let s = state.lock().unwrap();
-                            for (role, content) in s.session.history() {
-                                app.add_message(&display_role(&role), &content);
-                            }
-                            app.add_message("System", &format!("✓ Resumed session {id} ({count} messages restored)"));
+                Ok(Some(id)) => match st.load_session_into_state(id) {
+                    Ok(count) => {
+                        drop(st);
+                        app.messages.clear();
+                        let s = state.lock().unwrap();
+                        for (role, content) in s.session.history() {
+                            app.add_message(&display_role(&role), &content);
                         }
-                        Err(e) => app.add_message("Error", &format!("Failed to load session: {e}")),
+                        app.add_message(
+                            "System",
+                            &format!("✓ Resumed session {id} ({count} messages restored)"),
+                        );
                     }
+                    Err(e) => app.add_message("Error", &format!("Failed to load session: {e}")),
+                },
+                Ok(None) => {
+                    app.add_message("System", "No previous session found for this workspace.")
                 }
-                Ok(None) => app.add_message("System", "No previous session found for this workspace."),
                 Err(e) => app.add_message("Error", &format!("Failed to query sessions: {e}")),
             }
             true
@@ -740,6 +775,19 @@ cloud_ranked.sort_by_key(|(rank, _)| *rank);
                     cmds.join(" · ")
                 ),
             );
+            true
+        }
+        "/plan" => {
+            app.agent_mode = match app.agent_mode {
+                AgentMode::Agent => AgentMode::Plan,
+                AgentMode::Plan => AgentMode::Agent,
+            };
+            let mode_str = match app.agent_mode {
+                AgentMode::Agent => "agent (tool-use)",
+                AgentMode::Plan => "plan (planner-first)",
+            };
+            app.add_message("System", &format!("Mode: {}", mode_str));
+            app.status = format!("Ready · mode: {} · Esc interrupt", mode_str);
             true
         }
         _ => false,
@@ -796,7 +844,10 @@ fn block_on_async<F: std::future::Future>(fut: F) -> F::Output {
 
 fn auto_test_cache_path() -> std::path::PathBuf {
     if let Some(home) = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")) {
-        std::path::PathBuf::from(home).join(".gemini").join("antigravity-cli").join("last_auto_test.json")
+        std::path::PathBuf::from(home)
+            .join(".gemini")
+            .join("antigravity-cli")
+            .join("last_auto_test.json")
     } else {
         std::env::temp_dir().join("last_auto_test.json")
     }
@@ -908,7 +959,10 @@ fn start_async_auto_test(
         "System",
         &format!("🧪 [Auto Mode Test] Executando novo teste de disponibilidade em tempo real nos modelos fixados ({})…", candidates.join(", ")),
     );
-    app.status = format!("Testing availability across {} pinned models…", candidates.len());
+    app.status = format!(
+        "Testing availability across {} pinned models…",
+        candidates.len()
+    );
 
     let router_clone = router.clone();
     let provider_clone = provider.clone();
@@ -1006,7 +1060,8 @@ fn set_active_model(
     auto_test_tx: Option<&mpsc::Sender<AutoTestProbeEvent>>,
 ) {
     let clean = name.trim_end_matches(" [cloud]").to_string();
-    let is_force_test = clean.contains("test") || clean.contains("refresh") || clean.contains("probe");
+    let is_force_test =
+        clean.contains("test") || clean.contains("refresh") || clean.contains("probe");
     let is_auto_cmd = clean == "auto" || clean.starts_with("auto");
     if is_auto_cmd {
         app.auto_model = true;
@@ -1030,12 +1085,18 @@ fn set_active_model(
                 app.last_auto_test = Some(record.clone());
                 router.set_model(&best);
                 let catalog = crate::models_dev::ModelsDevClient::load();
-                if catalog.provider_model_api_id(&app.provider, &best).is_some() {
+                if catalog
+                    .provider_model_api_id(&app.provider, &best)
+                    .is_some()
+                {
                     router.mark_cloud(&best);
                 }
                 let scene = format_auto_test_scene(&record);
                 app.add_message("System", &scene);
-                app.status = format!("Ready · model: {best} (auto {}ms) · Esc interrupt", record.selected_latency_ms);
+                app.status = format!(
+                    "Ready · model: {best} (auto {}ms) · Esc interrupt",
+                    record.selected_latency_ms
+                );
             }
             return;
         }
@@ -1054,7 +1115,10 @@ fn set_active_model(
             app.last_auto_test = Some(rec.clone());
             router.set_model(&best);
             let catalog = crate::models_dev::ModelsDevClient::load();
-            if catalog.provider_model_api_id(&app.provider, &best).is_some() {
+            if catalog
+                .provider_model_api_id(&app.provider, &best)
+                .is_some()
+            {
                 router.mark_cloud(&best);
             }
             app.add_message(
@@ -1064,7 +1128,10 @@ fn set_active_model(
                     rec.selected_model, rec.selected_latency_ms
                 ),
             );
-            app.status = format!("Ready · model: {best} (auto {}ms) · Esc interrupt", rec.selected_latency_ms);
+            app.status = format!(
+                "Ready · model: {best} (auto {}ms) · Esc interrupt",
+                rec.selected_latency_ms
+            );
         } else if let Some(tx) = auto_test_tx {
             start_async_auto_test(app, state, router, tx.clone());
         } else {
@@ -1126,8 +1193,7 @@ fn set_active_provider(
             router.clear_cloud_marks();
             app.provider = name.to_string();
             app.add_message("System", &format!("Cloud provider set to {name} ({base})"));
-            app.status =
-                format!("Ready · provider: {name} · run /model to list its models");
+            app.status = format!("Ready · provider: {name} · run /model to list its models");
         }
         Err(e) => {
             app.add_message("Error", &format!("Provider {name} not configured: {e}"));
@@ -1183,7 +1249,8 @@ fn run_input(
     start: &mut Instant,
     input: &str,
 ) {
-    if input.starts_with('/') && handle_slash_command(input, app, state, client, Some(auto_test_tx)) {
+    if input.starts_with('/') && handle_slash_command(input, app, state, client, Some(auto_test_tx))
+    {
         app.clear_input();
         return;
     }
@@ -1215,12 +1282,7 @@ struct TerminalGuard {
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
         let _ = crossterm::terminal::disable_raw_mode();
-        let _ = execute!(
-            self.stdout,
-            LeaveAlternateScreen,
-            DisableMouseCapture,
-            Show
-        );
+        let _ = execute!(self.stdout, LeaveAlternateScreen, DisableMouseCapture, Show);
     }
 }
 
@@ -1235,6 +1297,9 @@ pub fn run_ui(client: LlmRouter, state: AgentState) -> Result<(), Box<dyn Error>
     };
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    // Enable bracketed paste mode (ESC [?2004h)
+    let _ = io::stdout().write_all(b"\x1b[?2004h");
+    let _ = io::stdout().flush();
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -1275,6 +1340,10 @@ pub fn run_ui(client: LlmRouter, state: AgentState) -> Result<(), Box<dyn Error>
     let (approval_tx, approval_rx) = mpsc::channel::<ApprovalRequest>();
     let (decision_tx, decision_rx) = mpsc::channel::<ApprovalDecision>();
     let decision_rx = Arc::new(Mutex::new(decision_rx));
+    // Plan approval broker.
+    let (plan_approval_tx, plan_approval_rx) = mpsc::channel::<PlanApprovalRequest>();
+    let (plan_decision_tx, plan_decision_rx) = mpsc::channel::<PlanApprovalDecision>();
+    let plan_decision_rx = Arc::new(Mutex::new(plan_decision_rx));
     let interrupt = Arc::new(AtomicBool::new(false));
     let (task_tx, task_rx) = mpsc::channel::<(String, AgentMode)>();
     let task_rx = Arc::new(Mutex::new(task_rx));
@@ -1292,6 +1361,8 @@ pub fn run_ui(client: LlmRouter, state: AgentState) -> Result<(), Box<dyn Error>
         let agent_tx_worker = agent_tx.clone();
         let approval_tx_worker = approval_tx.clone();
         let decision_rx_worker = Arc::clone(&decision_rx);
+        let plan_approval_tx_worker = plan_approval_tx.clone();
+        let plan_decision_rx_worker = Arc::clone(&plan_decision_rx);
         let task_rx_worker = Arc::clone(&task_rx);
 
         thread::spawn(move || {
@@ -1301,6 +1372,8 @@ pub fn run_ui(client: LlmRouter, state: AgentState) -> Result<(), Box<dyn Error>
                 let agent_tx_text = agent_tx_worker.clone();
                 let approval_tx_clone = approval_tx_worker.clone();
                 let approval_rx_clone = Arc::clone(&decision_rx_worker);
+                let plan_approval_tx_clone = plan_approval_tx_worker.clone();
+                let plan_decision_rx_clone = Arc::clone(&plan_decision_rx_worker);
                 let interrupt_clone = Arc::clone(&interrupt_worker);
 
                 let hooks = AgentHooks {
@@ -1321,6 +1394,15 @@ pub fn run_ui(client: LlmRouter, state: AgentState) -> Result<(), Box<dyn Error>
                             .lock()
                             .map(|rx| rx.recv().unwrap_or(ApprovalDecision::Deny))
                             .unwrap_or(ApprovalDecision::Deny)
+                    })),
+                    on_plan_approval: Some(Arc::new(move |request| {
+                        if plan_approval_tx_clone.send(request).is_err() {
+                            return PlanApprovalDecision::Deny;
+                        }
+                        plan_decision_rx_clone
+                            .lock()
+                            .map(|rx| rx.recv().unwrap_or(PlanApprovalDecision::Deny))
+                            .unwrap_or(PlanApprovalDecision::Deny)
                     })),
                     interrupt: Some(interrupt_clone),
                 };
@@ -1367,7 +1449,11 @@ pub fn run_ui(client: LlmRouter, state: AgentState) -> Result<(), Box<dyn Error>
                         let s: String = summary.chars().take(120).collect();
                         a.add_message("Tool", &format!("{name} — {s}"));
                     }
-                    AgentEvent::ToolCallDelta { index, name, args_delta } => {
+                    AgentEvent::ToolCallDelta {
+                        index,
+                        name,
+                        args_delta,
+                    } => {
                         let prefix = name.as_deref().unwrap_or("?");
                         a.feed_tool_delta(index, prefix, &args_delta);
                     }
@@ -1406,11 +1492,15 @@ pub fn run_ui(client: LlmRouter, state: AgentState) -> Result<(), Box<dyn Error>
                                 "Ready · Enter to send · ↑/↓ history · PgUp/PgDn scroll · mouse wheel · Esc interrupt"
                                     .into();
                         } else {
-                            a.status = format!("Working… ({} background tasks queued)", a.pending_tasks);
+                            a.status =
+                                format!("Working… ({} background tasks queued)", a.pending_tasks);
                         }
                     }
                     AgentEvent::Transaction { action, summary } => {
                         a.add_message("Workspace", &format!("[{action}] {summary}"));
+                    }
+                    AgentEvent::Routing { summary } => {
+                        a.add_message("Router", &summary);
                     }
                     AgentEvent::Failed { message } => {
                         a.end_streaming(None);
@@ -1450,26 +1540,34 @@ pub fn run_ui(client: LlmRouter, state: AgentState) -> Result<(), Box<dyn Error>
             let mut a = app.lock().unwrap();
             for ev in probe_events {
                 match ev {
-                    AutoTestProbeEvent::ProbeStarted { model, index, total } => {
+                    AutoTestProbeEvent::ProbeStarted {
+                        model,
+                        index,
+                        total,
+                    } => {
                         a.auto_test_running = true;
                         a.auto_test_current_candidate = Some((model.clone(), index, total));
                         a.status = format!("Testing availability [{index}/{total}] {model}…");
                     }
-                    AutoTestProbeEvent::ProbeSuccess { model, latency_ms, .. } => {
-                        a.auto_test_live_results.push(crate::llm::router::AutoTestProbeResult {
-                            model,
-                            latency_ms,
-                            success: true,
-                            error: None,
-                        });
+                    AutoTestProbeEvent::ProbeSuccess {
+                        model, latency_ms, ..
+                    } => {
+                        a.auto_test_live_results
+                            .push(crate::llm::router::AutoTestProbeResult {
+                                model,
+                                latency_ms,
+                                success: true,
+                                error: None,
+                            });
                     }
                     AutoTestProbeEvent::ProbeFailed { model, error, .. } => {
-                        a.auto_test_live_results.push(crate::llm::router::AutoTestProbeResult {
-                            model,
-                            latency_ms: 0,
-                            success: false,
-                            error: Some(error),
-                        });
+                        a.auto_test_live_results
+                            .push(crate::llm::router::AutoTestProbeResult {
+                                model,
+                                latency_ms: 0,
+                                success: false,
+                                error: Some(error),
+                            });
                     }
                     AutoTestProbeEvent::Complete { record } => {
                         a.auto_test_running = false;
@@ -1492,7 +1590,10 @@ pub fn run_ui(client: LlmRouter, state: AgentState) -> Result<(), Box<dyn Error>
                         }
                         let scene = format_auto_test_scene(&record);
                         a.add_message("System", &scene);
-                        a.status = format!("Ready · model: {best} (auto {}ms) · Esc interrupt", record.selected_latency_ms);
+                        a.status = format!(
+                            "Ready · model: {best} (auto {}ms) · Esc interrupt",
+                            record.selected_latency_ms
+                        );
                     }
                 }
             }
@@ -1502,6 +1603,13 @@ pub fn run_ui(client: LlmRouter, state: AgentState) -> Result<(), Box<dyn Error>
             let mut a = app.lock().unwrap();
             a.status = format!("Approval required: {} · a/s/d", request.tool);
             a.pending_approval = Some(request);
+        }
+        // Surface any pending plan approval request from the worker.
+        if let Ok(request) = plan_approval_rx.try_recv() {
+            let mut a = app.lock().unwrap();
+            let step_count = request.steps.len();
+            a.status = format!("Plan approval required: {} step(s) · a/s/d", step_count);
+            a.pending_plan_approval = Some(request);
         }
         // Refresh context budget + workspace diff + elapsed + spinner from shared state.
         // Do not block rendering while the worker owns AgentState for a turn.
@@ -1583,6 +1691,32 @@ pub fn run_ui(client: LlmRouter, state: AgentState) -> Result<(), Box<dyn Error>
                         continue;
                     }
                 }
+                // The plan approval modal only captures explicit decisions.
+                if guard.pending_plan_approval.is_some() {
+                    let decision = match key.code {
+                        KeyCode::Char('a') | KeyCode::Char('s') => {
+                            Some(PlanApprovalDecision::Approve)
+                        }
+                        KeyCode::Char('d') | KeyCode::Esc => Some(PlanApprovalDecision::Deny),
+                        _ => None,
+                    };
+                    if let Some(decision) = decision {
+                        let request = guard.pending_plan_approval.take();
+                        let label = match decision {
+                            PlanApprovalDecision::Approve => "approved",
+                            PlanApprovalDecision::Deny => "denied",
+                        };
+                        if let Some(request) = request {
+                            guard.add_message(
+                                "Plan",
+                                &format!("Plan {label} ({} steps)", request.steps.len()),
+                            );
+                        }
+                        guard.status = "Working…".into();
+                        let _ = plan_decision_tx.send(decision);
+                        continue;
+                    }
+                }
                 if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('l') {
                     guard.messages.clear();
                     guard.status = "Chat cleared (session memory is preserved).".into();
@@ -1619,6 +1753,22 @@ pub fn run_ui(client: LlmRouter, state: AgentState) -> Result<(), Box<dyn Error>
                     guard.reasoning_expanded = !guard.reasoning_expanded;
                     continue;
                 }
+                // Ctrl+Shift+C: copy last assistant message to clipboard (OSC 52)
+                if key
+                    .modifiers
+                    .contains(KeyModifiers::CONTROL | KeyModifiers::SHIFT)
+                    && key.code == KeyCode::Char('c')
+                {
+                    if let Some((_, content)) =
+                        guard.messages.iter().rev().find(|(r, _)| r == "Assistant")
+                    {
+                        copy_to_clipboard(content);
+                        guard.status = format!("Copied {} chars to clipboard", content.len());
+                    } else {
+                        guard.status = "No assistant message to copy".into();
+                    }
+                    continue;
+                }
                 // The file-search overlay captures all keystrokes while open.
                 if guard.file_search {
                     let mut handled = true;
@@ -1642,8 +1792,7 @@ pub fn run_ui(client: LlmRouter, state: AgentState) -> Result<(), Box<dyn Error>
                                 {
                                     let path = m.path.clone();
                                     guard.file_search = false;
-                                    let content =
-                                        state.lock().unwrap().files.read_file(&path);
+                                    let content = state.lock().unwrap().files.read_file(&path);
                                     guard.open_editor(&path, content.as_deref());
                                 }
                             }
@@ -1657,7 +1806,11 @@ pub fn run_ui(client: LlmRouter, state: AgentState) -> Result<(), Box<dyn Error>
                 }
                 // Modal pickers (slash-command menu / model selector) take over
                 // Up/Down/Enter/Esc while open.
-                if guard.command_menu || guard.model_selector || guard.provider_selector || guard.resume_selector {
+                if guard.command_menu
+                    || guard.model_selector
+                    || guard.provider_selector
+                    || guard.resume_selector
+                {
                     let mut handled = true;
                     match key.code {
                         KeyCode::Up => {
@@ -1716,7 +1869,13 @@ pub fn run_ui(client: LlmRouter, state: AgentState) -> Result<(), Box<dyn Error>
                                     .unwrap_or_default();
                                 guard.model_selector = false;
                                 if !name.is_empty() {
-                                    set_active_model(&mut guard, &state, &client, &name, Some(&auto_test_tx));
+                                    set_active_model(
+                                        &mut guard,
+                                        &state,
+                                        &client,
+                                        &name,
+                                        Some(&auto_test_tx),
+                                    );
                                 }
                             } else if guard.provider_selector {
                                 let name = guard
@@ -1730,7 +1889,9 @@ pub fn run_ui(client: LlmRouter, state: AgentState) -> Result<(), Box<dyn Error>
                                     set_active_provider(&mut guard, &state, &client, &id);
                                 }
                             } else if guard.resume_selector {
-                                if let Some(&session_id) = guard.resume_ids.get(guard.resume_selected) {
+                                if let Some(&session_id) =
+                                    guard.resume_ids.get(guard.resume_selected)
+                                {
                                     guard.resume_selector = false;
                                     let mut st = state.lock().unwrap();
                                     match st.load_session_into_state(session_id) {
@@ -1743,7 +1904,9 @@ pub fn run_ui(client: LlmRouter, state: AgentState) -> Result<(), Box<dyn Error>
                                             }
                                             guard.add_message("System", &format!("✓ Resumed session {session_id} ({count} messages)"));
                                         }
-                                        Err(e) => guard.add_message("Error", &format!("Failed: {e}")),
+                                        Err(e) => {
+                                            guard.add_message("Error", &format!("Failed: {e}"))
+                                        }
                                     }
                                 }
                             }
@@ -1756,7 +1919,11 @@ pub fn run_ui(client: LlmRouter, state: AgentState) -> Result<(), Box<dyn Error>
                         }
                         _ => handled = false,
                     }
-                    if handled || guard.model_selector || guard.provider_selector || guard.resume_selector {
+                    if handled
+                        || guard.model_selector
+                        || guard.provider_selector
+                        || guard.resume_selector
+                    {
                         continue;
                     }
                 }
@@ -1997,7 +2164,7 @@ pub fn run_ui(client: LlmRouter, state: AgentState) -> Result<(), Box<dyn Error>
                         if guard.focus == Focus::Editor {
                             let row = guard.editor_row;
                             if row < guard.editor_lines.len() {
-                            let len = guard.editor_lines[row].chars().count();
+                                let len = guard.editor_lines[row].chars().count();
                                 if guard.editor_col < len {
                                     guard.editor_col += 1;
                                 } else if row + 1 < guard.editor_lines.len() {
@@ -2061,11 +2228,6 @@ pub fn run_ui(client: LlmRouter, state: AgentState) -> Result<(), Box<dyn Error>
             }
             Ok(Event::Mouse(mouse)) => {
                 let mut guard = app.lock().unwrap();
-                if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
-                    && !guard.loading
-                {
-                    guard.focus = Focus::Messages;
-                }
                 match mouse.kind {
                     MouseEventKind::ScrollUp => {
                         guard.scroll_offset = guard.scroll_offset.saturating_sub(5);
@@ -2081,9 +2243,7 @@ pub fn run_ui(client: LlmRouter, state: AgentState) -> Result<(), Box<dyn Error>
                         let clicked_row = mouse.row as usize;
                         if clicked_row > msg_area_top {
                             let offset = if guard.follow {
-                                flattened
-                                    .len()
-                                    .saturating_sub(guard.scroll_offset)
+                                flattened.len().saturating_sub(guard.scroll_offset)
                             } else {
                                 guard.scroll_offset
                             };
@@ -2094,8 +2254,7 @@ pub fn run_ui(client: LlmRouter, state: AgentState) -> Result<(), Box<dyn Error>
                                     || line_text.starts_with("Δ")
                                     || line_text.contains(" tool use")
                                 {
-                                    guard.tool_calls_expanded =
-                                        !guard.tool_calls_expanded;
+                                    guard.tool_calls_expanded = !guard.tool_calls_expanded;
                                 }
                             }
                         }
@@ -2133,26 +2292,42 @@ pub fn run_ui(client: LlmRouter, state: AgentState) -> Result<(), Box<dyn Error>
 fn update_info_sections(app: &mut App, _state: &AgentState) {
     let used = app.tokens;
     let max = app.max_context_tokens;
-    let pct = if max > 0 { (used as f64 / max as f64) * 100.0 } else { 0.0 };
+    let pct = if max > 0 {
+        (used as f64 / max as f64) * 100.0
+    } else {
+        0.0
+    };
     let cost = app.context_cost;
 
-    app.info_sections[0] = InfoPanelSection::open("Context", vec![
-        Span::styled(format!("{} tokens", used), Style::default()),
-        Span::styled(format!("{:.0}% used", pct), Style::default()),
-        Span::styled(format!("${:.4} spent", cost), Style::default()),
-    ]);
+    app.info_sections[0] = InfoPanelSection::open(
+        "Context",
+        vec![
+            Span::styled(format!("{} tokens", used), Style::default()),
+            Span::styled(format!("{:.0}% used", pct), Style::default()),
+            Span::styled(format!("${:.4} spent", cost), Style::default()),
+        ],
+    );
 
     let tb = &app.token_breakdown;
-    app.info_sections[1] = InfoPanelSection::open("Token Usage", vec![
-        Span::styled(format!("Input: {}", tb.input), Style::default()),
-        Span::styled(format!("Output: {}", tb.output), Style::default()),
-        Span::styled(format!("Reasoning: {}", tb.reasoning), Style::default()),
-        Span::styled(format!("Cache read: {}", tb.cache_read), Style::default()),
-        Span::styled(format!("Cache write: {}", tb.cache_write), Style::default()),
-        Span::styled(format!("Cache rate: {:.1}%", tb.cache_rate), Style::default()),
-        Span::styled(format!("Speed: {:.1} tok/s", tb.generation_speed), Style::default()),
-        Span::styled(format!("Cost: ${:.4}", cost), Style::default()),
-    ]);
+    app.info_sections[1] = InfoPanelSection::open(
+        "Token Usage",
+        vec![
+            Span::styled(format!("Input: {}", tb.input), Style::default()),
+            Span::styled(format!("Output: {}", tb.output), Style::default()),
+            Span::styled(format!("Reasoning: {}", tb.reasoning), Style::default()),
+            Span::styled(format!("Cache read: {}", tb.cache_read), Style::default()),
+            Span::styled(format!("Cache write: {}", tb.cache_write), Style::default()),
+            Span::styled(
+                format!("Cache rate: {:.1}%", tb.cache_rate),
+                Style::default(),
+            ),
+            Span::styled(
+                format!("Speed: {:.1} tok/s", tb.generation_speed),
+                Style::default(),
+            ),
+            Span::styled(format!("Cost: ${:.4}", cost), Style::default()),
+        ],
+    );
 
     app.info_sections[2] = InfoPanelSection::open("Models", {
         let mut lines = app
@@ -2166,12 +2341,17 @@ fn update_info_sections(app: &mut App, _state: &AgentState) {
         lines
     });
 
-    app.info_sections[3] = InfoPanelSection::open("Code Indexing", vec![
-        Span::styled(
-            if app.indexing_enabled { "Enabled" } else { "Disabled" },
+    app.info_sections[3] = InfoPanelSection::open(
+        "Code Indexing",
+        vec![Span::styled(
+            if app.indexing_enabled {
+                "Enabled"
+            } else {
+                "Disabled"
+            },
             Style::default(),
-        ),
-    ]);
+        )],
+    );
 
     app.info_sections[4] = InfoPanelSection::open("Todo", {
         let mut lines = Vec::new();
@@ -2180,7 +2360,10 @@ fn update_info_sections(app: &mut App, _state: &AgentState) {
         } else {
             for item in &app.todo_items {
                 let mark = if item.done { "[x]" } else { "[ ]" };
-                lines.push(Span::styled(format!("{} {}", mark, item.text), Style::default()));
+                lines.push(Span::styled(
+                    format!("{} {}", mark, item.text),
+                    Style::default(),
+                ));
             }
         }
         lines
@@ -2215,10 +2398,17 @@ fn update_info_sections(app: &mut App, _state: &AgentState) {
         }
     });
 
-    app.info_sections[6] = InfoPanelSection::open("Memory", vec![Span::styled(
-        if app.memory_enabled { "Enabled" } else { "Disabled" },
-        Style::default(),
-    )]);
+    app.info_sections[6] = InfoPanelSection::open(
+        "Memory",
+        vec![Span::styled(
+            if app.memory_enabled {
+                "Enabled"
+            } else {
+                "Disabled"
+            },
+            Style::default(),
+        )],
+    );
 }
 
 fn draw<B: ratatui::backend::Backend>(
@@ -2667,6 +2857,59 @@ fn draw<B: ratatui::backend::Backend>(
                 .wrap(Wrap { trim: true });
             f.render_widget(paragraph, area);
         }
+
+        // Plan approval modal (Plan mode).
+        if let Some(request) = &app.pending_plan_approval {
+            let popup_w = 80.min(size.width.saturating_sub(4));
+            let step_count = request.steps.len();
+            let popup_h = ((4 + step_count.min(12)) as u16).min(size.height.saturating_sub(4));
+            let area = Rect {
+                x: size.x + (size.width.saturating_sub(popup_w)) / 2,
+                y: size.y + (size.height.saturating_sub(popup_h)) / 3,
+                width: popup_w,
+                height: popup_h,
+            };
+            let mut body = vec![
+                Line::from(Span::styled(
+                    format!("Plan: {} step(s)", step_count),
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                )),
+                Line::from(Span::raw("")),
+            ];
+            for (i, step) in request.steps.iter().take(12).enumerate() {
+                let cmd = step.command.as_deref().unwrap_or("");
+                let file = step.filename.as_deref().unwrap_or("");
+                let desc = if !cmd.is_empty() {
+                    format!("  {}. [{}] {} — `{}`", i + 1, step.step_type, step.description, cmd)
+                } else if !file.is_empty() {
+                    format!("  {}. [{}] {} ({})", i + 1, step.step_type, step.description, file)
+                } else {
+                    format!("  {}. [{}] {}", i + 1, step.step_type, step.description)
+                };
+                body.push(Line::from(Span::raw(desc)));
+            }
+            if step_count > 12 {
+                body.push(Line::from(Span::styled(
+                    format!("  … and {} more step(s)", step_count - 12),
+                    Style::default().fg(Color::Gray),
+                )));
+            }
+            body.push(Line::from(Span::raw("")));
+            body.push(Line::from(Span::styled(
+                "a/s: approve   d/Esc: deny",
+                Style::default().fg(Color::Cyan),
+            )));
+            let paragraph = Paragraph::new(body)
+                .block(
+                    Block::default()
+                        .title(" Plan approval required ")
+                        .borders(Borders::ALL),
+                )
+                .wrap(Wrap { trim: true });
+            f.render_widget(paragraph, area);
+        }
     })?;
     Ok(())
 }
@@ -2726,8 +2969,7 @@ fn flush_tool_rollup(
 /// Groups by tool name and shows counts, e.g. "Read file, Glob, Bash ×5".
 /// Active (streaming) tool calls are marked with a ● prefix.
 fn format_tool_rollup(buffer: &[String]) -> String {
-    let mut counts: std::collections::BTreeMap<String, usize> =
-        std::collections::BTreeMap::new();
+    let mut counts: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
     let mut active_tools: Vec<String> = Vec::new();
     for content in buffer {
         let name = extract_tool_name(content);
@@ -2777,32 +3019,17 @@ fn flatten_messages(app: &App) -> Vec<Line<'static>> {
         match role.to_ascii_lowercase().as_str() {
             "user" => {
                 in_plan = false;
-                flush_tool_rollup(
-                    app,
-                    &mut tool_count,
-                    &mut tool_buffer,
-                    &mut lines,
-                );
+                flush_tool_rollup(app, &mut tool_count, &mut tool_buffer, &mut lines);
                 lines.extend(user_message_lines(content));
             }
             "assistant" => {
                 in_plan = false;
-                flush_tool_rollup(
-                    app,
-                    &mut tool_count,
-                    &mut tool_buffer,
-                    &mut lines,
-                );
+                flush_tool_rollup(app, &mut tool_count, &mut tool_buffer, &mut lines);
                 lines.extend(assistant_message_lines(content));
             }
             "thinking" => {
                 in_plan = false;
-                flush_tool_rollup(
-                    app,
-                    &mut tool_count,
-                    &mut tool_buffer,
-                    &mut lines,
-                );
+                flush_tool_rollup(app, &mut tool_count, &mut tool_buffer, &mut lines);
                 if app.reasoning_expanded {
                     lines.extend(status_message_lines(role, content));
                 } else {
@@ -2812,22 +3039,12 @@ fn flatten_messages(app: &App) -> Vec<Line<'static>> {
             }
             "plan" => {
                 in_plan = true;
-                flush_tool_rollup(
-                    app,
-                    &mut tool_count,
-                    &mut tool_buffer,
-                    &mut lines,
-                );
+                flush_tool_rollup(app, &mut tool_count, &mut tool_buffer, &mut lines);
                 lines.extend(status_message_lines(role, content));
             }
             "tool" => {
                 if app.tool_calls_expanded {
-                    flush_tool_rollup(
-                        app,
-                        &mut tool_count,
-                        &mut tool_buffer,
-                        &mut lines,
-                    );
+                    flush_tool_rollup(app, &mut tool_count, &mut tool_buffer, &mut lines);
                     if in_plan {
                         lines.extend(plan_tool_message_lines(content));
                     } else {
@@ -2840,23 +3057,12 @@ fn flatten_messages(app: &App) -> Vec<Line<'static>> {
             }
             _ => {
                 in_plan = false;
-                flush_tool_rollup(
-                    app,
-                    &mut tool_count,
-                    &mut tool_buffer,
-                    &mut lines,
-                );
+                flush_tool_rollup(app, &mut tool_count, &mut tool_buffer, &mut lines);
                 lines.extend(status_message_lines(role, content));
             }
         }
-        lines.push(Line::from(""));
     }
-    flush_tool_rollup(
-        app,
-        &mut tool_count,
-        &mut tool_buffer,
-        &mut lines,
-    );
+    flush_tool_rollup(app, &mut tool_count, &mut tool_buffer, &mut lines);
     lines
 }
 
@@ -2866,7 +3072,10 @@ fn plan_tool_message_lines(content: &str) -> Vec<Line<'static>> {
     for line in content.lines() {
         let mut spans = Vec::new();
         spans.push(Span::styled("⎿ ", Style::default().fg(Color::Gray)));
-        spans.push(Span::styled(line.to_string(), Style::default().fg(Color::Gray)));
+        spans.push(Span::styled(
+            line.to_string(),
+            Style::default().fg(Color::Gray),
+        ));
         out.push(Line::from(spans));
     }
     out
@@ -2889,7 +3098,10 @@ fn user_message_lines(content: &str) -> Vec<Line<'static>> {
             Span::styled("  ", Style::default())
         };
         first = false;
-        out.push(Line::from(vec![prefix, Span::styled(content_line.to_string(), style)]));
+        out.push(Line::from(vec![
+            prefix,
+            Span::styled(content_line.to_string(), style),
+        ]));
     }
     if first {
         // Empty message: render the prompt prefix so the cell stays visible.
@@ -2908,7 +3120,10 @@ fn user_message_lines(content: &str) -> Vec<Line<'static>> {
 fn assistant_message_lines(content: &str) -> Vec<Line<'static>> {
     let raw_spans = match render_markdown_lines(content) {
         Some(spans) => spans,
-        None => vec![Span::styled(content.to_string(), Style::default().fg(Color::Gray))],
+        None => vec![Span::styled(
+            content.to_string(),
+            Style::default().fg(Color::Gray),
+        )],
     };
 
     let mut out = Vec::new();
@@ -2959,7 +3174,11 @@ fn collapse_consecutive_blanks(spans: Vec<Span<'static>>) -> Vec<Span<'static>> 
     let mut out: Vec<Span<'static>> = Vec::with_capacity(spans.len());
     for span in spans {
         let blank = span.content.trim().is_empty();
-        if blank && out.last().is_some_and(|last: &Span<'static>| last.content.trim().is_empty()) {
+        if blank
+            && out
+                .last()
+                .is_some_and(|last: &Span<'static>| last.content.trim().is_empty())
+        {
             continue;
         }
         out.push(span);
@@ -2990,13 +3209,22 @@ fn status_message_lines(role: &str, content: &str) -> Vec<Line<'static>> {
             let is_rollup = content.contains("tool use");
             let icon = if is_rollup {
                 "↳ "
-            } else if content.contains("list_dir") || content.contains("search") || content.contains("grep") {
+            } else if content.contains("list_dir")
+                || content.contains("search")
+                || content.contains("grep")
+            {
                 "🔍 "
             } else if content.contains("read") {
                 "📖 "
-            } else if content.contains("write") || content.contains("replace") || content.contains("edit") {
+            } else if content.contains("write")
+                || content.contains("replace")
+                || content.contains("edit")
+            {
                 "✏️ "
-            } else if content.contains("run") || content.contains("exec") || content.contains("cargo") {
+            } else if content.contains("run")
+                || content.contains("exec")
+                || content.contains("cargo")
+            {
                 "⚡ "
             } else if content.contains("verify") || content.contains("test") {
                 "🧪 "
@@ -3006,7 +3234,9 @@ fn status_message_lines(role: &str, content: &str) -> Vec<Line<'static>> {
                 "↳ "
             };
             let prefix_style = if is_active {
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(Color::Gray)
             };
@@ -3041,13 +3271,13 @@ fn status_message_lines(role: &str, content: &str) -> Vec<Line<'static>> {
             Style::default().fg(Color::Green),
             false,
         ),
-        "info" => ("", Style::default(), Style::default().fg(Color::Cyan), false),
-        _ => (
+        "info" => (
             "",
             Style::default(),
-            Style::default().fg(Color::Gray),
-            true,
+            Style::default().fg(Color::Cyan),
+            false,
         ),
+        _ => ("", Style::default(), Style::default().fg(Color::Gray), true),
     };
     let mut out = Vec::new();
     let mut first = true;
@@ -3111,9 +3341,21 @@ fn render_markdown_lines(text: &str) -> Option<Vec<Span<'static>>> {
                     spans.push(Span::styled(
                         t.as_ref().to_string(),
                         Style::default()
-                            .add_modifier(if in_bold { Modifier::BOLD } else { Modifier::empty() })
-                            .add_modifier(if in_italic { Modifier::ITALIC } else { Modifier::empty() })
-                            .add_modifier(if in_strike { Modifier::DIM } else { Modifier::empty() }),
+                            .add_modifier(if in_bold {
+                                Modifier::BOLD
+                            } else {
+                                Modifier::empty()
+                            })
+                            .add_modifier(if in_italic {
+                                Modifier::ITALIC
+                            } else {
+                                Modifier::empty()
+                            })
+                            .add_modifier(if in_strike {
+                                Modifier::DIM
+                            } else {
+                                Modifier::empty()
+                            }),
                     ));
                 } else {
                     spans.push(Span::raw(t.as_ref().to_string()));
@@ -3122,7 +3364,9 @@ fn render_markdown_lines(text: &str) -> Option<Vec<Span<'static>>> {
             Event::Code(t) => {
                 spans.push(Span::styled(
                     t.as_ref().to_string(),
-                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
                 ));
             }
             Event::SoftBreak | Event::HardBreak => {
@@ -3195,7 +3439,10 @@ fn render_markdown_lines(text: &str) -> Option<Vec<Span<'static>>> {
                 _ => {}
             },
             Event::Rule => {
-                spans.push(Span::styled("─".repeat(40), Style::default().fg(Color::Gray)));
+                spans.push(Span::styled(
+                    "─".repeat(40),
+                    Style::default().fg(Color::Gray),
+                ));
             }
             _ => {}
         }
@@ -3267,6 +3514,15 @@ fn sanitize_status(s: &str) -> String {
         }
     }
     out
+}
+
+/// Copy text to system clipboard using OSC 52 escape sequence.
+/// Works in most modern terminals (Alacritty, Kitty, WezTerm, iTerm2, Windows Terminal, etc.)
+fn copy_to_clipboard(text: &str) {
+    let encoded = BASE64_STANDARD.encode(text);
+    let osc52 = format!("\x1b]52;c;{}\x07", encoded);
+    let _ = io::stdout().write_all(osc52.as_bytes());
+    let _ = io::stdout().flush();
 }
 
 fn format_elapsed(d: Duration) -> String {
@@ -3377,7 +3633,10 @@ mod tests {
         app.feed_tool_delta(0, "?", "\"new\":1}");
         assert_eq!(app.messages.len(), 1);
         assert_eq!(app.messages[0].0, "Tool");
-        assert_eq!(app.messages[0].1, "Δ edit_file[0] {\"path\":\"a.rs\",\"new\":1}");
+        assert_eq!(
+            app.messages[0].1,
+            "Δ edit_file[0] {\"path\":\"a.rs\",\"new\":1}"
+        );
     }
 
     #[test]
@@ -3502,8 +3761,7 @@ mod tests {
         let lines = flatten_messages(&app);
         let texts: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
         assert!(texts[0].starts_with("› fix the bug"));
-        assert_eq!(texts[1], "");
-        assert!(texts[2].starts_with("• Done."));
+        assert!(texts[1].starts_with("• Done."));
     }
 
     #[test]
@@ -3516,8 +3774,8 @@ mod tests {
         let lines = flatten_messages(&app);
         let texts: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
         assert_eq!(texts[0], "ready");
-        assert!(texts[2].starts_with("✗ boom"));
-        assert!(texts[4].contains("edit_file — changed src/main.rs"));
+        assert!(texts[1].starts_with("✗ boom"));
+        assert!(texts[2].contains("edit_file — changed src/main.rs"));
     }
 
     #[test]
@@ -3538,9 +3796,15 @@ mod tests {
 
     #[test]
     fn extract_tool_name_handles_delta_and_completed_formats() {
-        assert_eq!(extract_tool_name("Δ edit_file[0] {\"path\": \"a.rs\"}"), "edit_file");
+        assert_eq!(
+            extract_tool_name("Δ edit_file[0] {\"path\": \"a.rs\"}"),
+            "edit_file"
+        );
         assert_eq!(extract_tool_name("Δ run_tests[3] all passed"), "run_tests");
-        assert_eq!(extract_tool_name("read_file — read src/main.rs"), "read_file");
+        assert_eq!(
+            extract_tool_name("read_file — read src/main.rs"),
+            "read_file"
+        );
         assert_eq!(extract_tool_name("bash"), "bash");
     }
 
@@ -3630,6 +3894,7 @@ mod tests {
             on_tool_call_delta: None,
             on_text_delta: None,
             on_approval: None,
+            on_plan_approval: None,
             interrupt: None,
         };
         hooks.emit(AgentEvent::ToolCallDelta {
@@ -3665,7 +3930,8 @@ mod tests {
     fn end_streaming_inserts_reasoning_tail_before_assistant() {
         let mut app = App::new("model");
         app.streaming_assistant = true;
-        app.messages.push(("Assistant".to_string(), "streamed partial".to_string()));
+        app.messages
+            .push(("Assistant".to_string(), "streamed partial".to_string()));
         app.reasoning.push_str("tail reasoning");
         let finalized = app.end_streaming(Some("final content"));
         assert!(finalized);
@@ -3680,8 +3946,10 @@ mod tests {
     fn end_streaming_appends_to_existing_thinking() {
         let mut app = App::new("model");
         app.streaming_assistant = true;
-        app.messages.push(("Assistant".to_string(), "streamed partial".to_string()));
-        app.messages.push(("Thinking".to_string(), "existing thinking".to_string()));
+        app.messages
+            .push(("Assistant".to_string(), "streamed partial".to_string()));
+        app.messages
+            .push(("Thinking".to_string(), "existing thinking".to_string()));
         app.reasoning.push_str(" more tail");
         let finalized = app.end_streaming(Some("final content"));
         assert!(finalized);
@@ -3696,7 +3964,8 @@ mod tests {
     fn end_streaming_no_content_only_flushes_reasoning() {
         let mut app = App::new("model");
         app.streaming_assistant = true;
-        app.messages.push(("Assistant".to_string(), "streamed partial".to_string()));
+        app.messages
+            .push(("Assistant".to_string(), "streamed partial".to_string()));
         app.reasoning.push_str("tail reasoning");
         let finalized = app.end_streaming(None);
         assert!(finalized);
@@ -3742,9 +4011,12 @@ mod tests {
     fn end_streaming_handles_multiple_thinking_flushes_after_partial() {
         let mut app = App::new("model");
         app.streaming_assistant = true;
-        app.messages.push(("Assistant".to_string(), "streamed partial".to_string()));
-        app.messages.push(("Thinking".to_string(), "flush A".to_string()));
-        app.messages.push(("Thinking".to_string(), "flush B".to_string()));
+        app.messages
+            .push(("Assistant".to_string(), "streamed partial".to_string()));
+        app.messages
+            .push(("Thinking".to_string(), "flush A".to_string()));
+        app.messages
+            .push(("Thinking".to_string(), "flush B".to_string()));
         let finalized = app.end_streaming(Some("final content"));
         assert!(finalized);
         assert_eq!(app.messages.len(), 3);
@@ -3760,7 +4032,8 @@ mod tests {
     fn end_streaming_without_assistant_pushes_final_content() {
         let mut app = App::new("model");
         app.streaming_assistant = true;
-        app.messages.push(("Thinking".to_string(), "reasoning only".to_string()));
+        app.messages
+            .push(("Thinking".to_string(), "reasoning only".to_string()));
         let finalized = app.end_streaming(Some("final content"));
         assert!(finalized);
         assert_eq!(app.messages.len(), 2);
@@ -3949,7 +4222,8 @@ mod tests {
         use ratatui::Terminal;
         let mut app = App::new("model");
         app.streaming_assistant = false;
-        app.messages.push(("Assistant".to_string(), "x".repeat(200)));
+        app.messages
+            .push(("Assistant".to_string(), "x".repeat(200)));
         let backend = TestBackend::new(40, 10);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
@@ -3988,7 +4262,8 @@ mod tests {
         use ratatui::Terminal;
         let mut app = App::new("model");
         app.streaming_assistant = false;
-        app.messages.push(("Assistant".to_string(), "word ".repeat(60)));
+        app.messages
+            .push(("Assistant".to_string(), "word ".repeat(60)));
         let backend = TestBackend::new(80, 24);
         let mut terminal = Terminal::new(backend).unwrap();
         draw(&mut terminal, &app).unwrap();
@@ -4008,13 +4283,17 @@ mod tests {
                 }
             }
         }
-        assert!(w_count > 5, "message not rendered after resize+clear+redraw");
+        assert!(
+            w_count > 5,
+            "message not rendered after resize+clear+redraw"
+        );
         // Nothing may render outside the resized buffer width (draw must not
         // have written stale glyphs beyond column 30).
         for y in 0..24 {
             for x in 30..80 {
                 assert!(
-                    !buf.cell((x, y)).is_some_and(|c| !c.symbol().trim().is_empty()),
+                    !buf.cell((x, y))
+                        .is_some_and(|c| !c.symbol().trim().is_empty()),
                     "cell at {x},{y} rendered outside the resized width"
                 );
             }

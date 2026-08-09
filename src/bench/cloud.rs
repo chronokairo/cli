@@ -1,6 +1,6 @@
+use super::model_bench::BenchResult;
 use std::sync::Arc;
 use std::time::Instant;
-use super::model_bench::BenchResult;
 
 const CLOUD_BENCH_PROMPT: &str = "Write a Python function that computes fibonacci numbers.";
 const CLOUD_BENCH_TIMEOUT_SECS: u64 = 60;
@@ -29,7 +29,11 @@ pub async fn benchmark_cloud_model(
         Ok(Ok(text)) => {
             let tokens_out = text.split_whitespace().count();
             let gen_ms = elapsed.as_millis() as u64;
-            let tps = if gen_ms > 0 { tokens_out as f32 / (gen_ms as f32 / 1000.0) } else { 0.0 };
+            let tps = if gen_ms > 0 {
+                tokens_out as f32 / (gen_ms as f32 / 1000.0)
+            } else {
+                0.0
+            };
             let sample: String = text.chars().take(80).collect();
 
             BenchResult {
@@ -47,7 +51,10 @@ pub async fn benchmark_cloud_model(
             }
         }
         Ok(Err(e)) => BenchResult::error(model_id, format!("provider error: {e}")),
-        Err(_) => BenchResult::error(model_id, format!("timeout after {CLOUD_BENCH_TIMEOUT_SECS}s")),
+        Err(_) => BenchResult::error(
+            model_id,
+            format!("timeout after {CLOUD_BENCH_TIMEOUT_SECS}s"),
+        ),
     }
 }
 
@@ -57,9 +64,14 @@ fn build_cloud_chain(
     model_id: &str,
     rpm: f64,
 ) -> crate::llm::provider_chain::FallbackChain {
-    use crate::llm::provider_chain::{NimProvider, LocalProvider, CompletionProvider};
+    use crate::llm::provider_chain::{CompletionProvider, LocalProvider, NimProvider};
 
-    let nim = Arc::new(NimProvider::new("https://integrate.api.nvidia.com", api_key.to_string(), model_id.to_string(), rpm));
+    let nim = Arc::new(NimProvider::new(
+        "https://integrate.api.nvidia.com",
+        api_key.to_string(),
+        model_id.to_string(),
+        rpm,
+    ));
     let local = Arc::new(LocalProvider::new(
         "http://localhost:11434".to_string(),
         "nemotron-3-nano".to_string(),
@@ -80,7 +92,9 @@ pub async fn rank_cloud_models(
         results.push(result);
     }
     results.sort_by(|a, b| {
-        b.tps.partial_cmp(&a.tps).unwrap_or(std::cmp::Ordering::Equal)
+        b.tps
+            .partial_cmp(&a.tps)
+            .unwrap_or(std::cmp::Ordering::Equal)
     });
     results
 }

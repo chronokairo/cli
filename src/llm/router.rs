@@ -89,9 +89,25 @@ impl LlmRouter {
         }
     }
 
+    /// Build a router with a fake cloud client, used by tests that need a
+    /// configured remote backend without a real provider/API key.
+    #[cfg(test)]
+    pub fn with_cloud_for_test(local: LlmClient, catalog: ModelsDevClient) -> Self {
+        let router = Self::with_catalog(local, catalog);
+        *router.cloud.lock().unwrap() =
+            Some(LlmClient::cloud("https://fake.invalid/v1", "test-key"));
+        router
+    }
+
     /// The currently active cloud provider id ("" when not configured).
     pub fn provider(&self) -> String {
         self.provider.lock().unwrap().clone()
+    }
+
+    /// Read-only access to the models.dev catalog, used by the task router to
+    /// resolve model capabilities and context windows per candidate.
+    pub fn catalog_client(&self) -> &ModelsDevClient {
+        &self.catalog
     }
 
     /// Build (or rebuild) the cloud backend for `provider` from the models.dev
@@ -179,7 +195,12 @@ impl LlmRouter {
     /// catalog prices ($ per million tokens). Prefers the active provider's
     /// listing; falls back to any provider matching the base id. Local/free
     /// models not in the catalog price at zero.
-    pub fn estimate_cost(&self, model: &str, prompt_tokens: usize, completion_tokens: usize) -> CostEstimate {
+    pub fn estimate_cost(
+        &self,
+        model: &str,
+        prompt_tokens: usize,
+        completion_tokens: usize,
+    ) -> CostEstimate {
         let base = base_id(model);
         let active = self.provider();
         let mut found: Option<(f64, f64)> = None;
@@ -237,13 +258,10 @@ impl LlmRouter {
         let start = std::time::Instant::now();
         let timeout_duration = std::time::Duration::from_secs(4);
 
-        tokio::time::timeout(
-            timeout_duration,
-            client.generate(&api_id, "Hi", None, None),
-        )
-        .await
-        .map_err(|_| anyhow::anyhow!("Timeout probing model '{model}'"))?
-        .map_err(|e| anyhow::anyhow!("Probe failed for model '{model}': {e}"))?;
+        tokio::time::timeout(timeout_duration, client.generate(&api_id, "Hi", None, None))
+            .await
+            .map_err(|_| anyhow::anyhow!("Timeout probing model '{model}'"))?
+            .map_err(|e| anyhow::anyhow!("Probe failed for model '{model}': {e}"))?;
 
         Ok(start.elapsed())
     }
@@ -313,7 +331,10 @@ impl LlmRouter {
         candidates: &[String],
     ) -> Result<(String, std::time::Duration)> {
         let record = self.test_and_rank_models(candidates).await;
-        Ok((record.selected_model, std::time::Duration::from_millis(record.selected_latency_ms as u64)))
+        Ok((
+            record.selected_model,
+            std::time::Duration::from_millis(record.selected_latency_ms as u64),
+        ))
     }
 
     /// Pick the concrete client for a model id (cloned; cheap for reqwest).
@@ -365,7 +386,8 @@ impl LlmRouter {
         tools: Option<&Vec<ToolDef>>,
         response_format: Option<&ResponseFormat>,
     ) -> Result<String> {
-        self.generate_with_retry(model, prompt, tools, response_format).await
+        self.generate_with_retry(model, prompt, tools, response_format)
+            .await
     }
 
     pub async fn chat(
@@ -440,7 +462,8 @@ impl LlmRouter {
         tool_choice: Option<&ToolChoice>,
         response_format: Option<&ResponseFormat>,
     ) -> Result<ChatCompletion> {
-        self.chat_meta_with_choice(model, messages, tools, tool_choice, response_format).await
+        self.chat_meta_with_choice(model, messages, tools, tool_choice, response_format)
+            .await
     }
 
     pub async fn stream(
@@ -454,7 +477,14 @@ impl LlmRouter {
     ) -> Result<String> {
         let (_, api_id) = self.resolve(model);
         self.client_for(model)?
-            .stream(&api_id, prompt, tools, response_format, on_token, on_tool_call_delta)
+            .stream(
+                &api_id,
+                prompt,
+                tools,
+                response_format,
+                on_token,
+                on_tool_call_delta,
+            )
             .await
     }
 
@@ -678,7 +708,10 @@ mod tests {
         // GLM-5.2 is the only intelligent one, so fallback should be None.
         // Let's test with nemotron-70b which is Smart tier.
         let fb = r.resolve_fallback("nvidia/llama-3.1-nemotron-70b-instruct");
-        assert!(fb.is_none(), "no same-tier fallback available in test catalog");
+        assert!(
+            fb.is_none(),
+            "no same-tier fallback available in test catalog"
+        );
     }
 
     #[test]
@@ -702,7 +735,10 @@ mod tests {
     #[tokio::test]
     async fn select_best_available_model_returns_first_if_probes_fail() {
         let r = router();
-        let candidates = vec!["nvidia/unknown-a".to_string(), "nvidia/unknown-b".to_string()];
+        let candidates = vec![
+            "nvidia/unknown-a".to_string(),
+            "nvidia/unknown-b".to_string(),
+        ];
         let (selected, _) = r.select_best_available_model(&candidates).await.unwrap();
         assert_eq!(selected, "nvidia/unknown-a");
     }

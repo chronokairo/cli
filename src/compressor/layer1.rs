@@ -14,31 +14,45 @@ pub fn compress(input: &str) -> CompressResult {
     let before = text.len();
 
     text = strip_ansi(&text);
-    if text.len() != before { rules.push("ansi_strip".into()); }
+    if text.len() != before {
+        rules.push("ansi_strip".into());
+    }
 
     let before_lin = text.lines().count();
     text = remove_progress_bars(&text);
-    if text.lines().count() != before_lin { rules.push("progress_bars".into()); }
+    if text.lines().count() != before_lin {
+        rules.push("progress_bars".into());
+    }
 
     let before_lin = text.lines().count();
     text = collapse_blank_lines(&text);
-    if text.lines().count() != before_lin { rules.push("collapse_blank_lines".into()); }
+    if text.lines().count() != before_lin {
+        rules.push("collapse_blank_lines".into());
+    }
 
     let before_lin = text.lines().count();
     text = template_dedup(&text);
-    if text.lines().count() != before_lin { rules.push("template_dedup".into()); }
+    if text.lines().count() != before_lin {
+        rules.push("template_dedup".into());
+    }
 
     let before_lin = text.lines().count();
     text = filter_stack_frames(&text);
-    if text.lines().count() != before_lin { rules.push("stack_collapse".into()); }
+    if text.lines().count() != before_lin {
+        rules.push("stack_collapse".into());
+    }
 
     let before_lin = text.lines().count();
     text = filter_test_pass(&text);
-    if text.lines().count() != before_lin { rules.push("test_filter".into()); }
+    if text.lines().count() != before_lin {
+        rules.push("test_filter".into());
+    }
 
     let before_lin = text.lines().count();
     text = factor_common_prefix(&text);
-    if text.lines().count() != before_lin { rules.push("prefix_factor".into()); }
+    if text.lines().count() != before_lin {
+        rules.push("prefix_factor".into());
+    }
 
     text = shorten_paths(&text);
     rules.push("path_shrink".into());
@@ -78,9 +92,12 @@ fn strip_ansi(input: &str) -> String {
 
 fn remove_progress_bars(input: &str) -> String {
     let spinner_chars: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-    input.lines()
+    input
+        .lines()
         .filter(|line| {
-            if line.trim().is_empty() { return true; }
+            if line.trim().is_empty() {
+                return true;
+            }
             let trimmed = line.trim();
             if trimmed.starts_with("Compiling ") || trimmed.starts_with("Checking ") {
                 return false;
@@ -107,7 +124,9 @@ fn collapse_blank_lines(input: &str) -> String {
     let mut prev_blank = false;
     for line in input.lines() {
         if line.trim().is_empty() {
-            if prev_blank { continue; }
+            if prev_blank {
+                continue;
+            }
             prev_blank = true;
         } else {
             prev_blank = false;
@@ -130,7 +149,8 @@ fn template_dedup(input: &str) -> String {
         }
         groups.push((norm, 1));
     }
-    groups.iter()
+    groups
+        .iter()
         .map(|(norm, count)| {
             if *count > 1 {
                 format!("[×{}] {}", count, norm)
@@ -145,7 +165,11 @@ fn template_dedup(input: &str) -> String {
 fn normalize_template(line: &str) -> String {
     let mut s = line.to_string();
     s = regex_replace(&s, r"\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}", "<TS>");
-    s = regex_replace(&s, r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b", "<UUID>");
+    s = regex_replace(
+        &s,
+        r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b",
+        "<UUID>",
+    );
     s = regex_replace(&s, r"\b0x[0-9a-fA-F]{6,}\b", "<HEX>");
     s = regex_replace(&s, r"\b\d{3,}\b", "<N>");
     s
@@ -164,8 +188,13 @@ fn filter_stack_frames(input: &str) -> String {
     let mut frame_run = 0;
     let mut skipped = false;
     let frame_patterns = [
-        "site-packages/", "node_modules/", ".cargo/registry/",
-        "go/pkg/", "lib/python", "vendor/", "packages/",
+        "site-packages/",
+        "node_modules/",
+        ".cargo/registry/",
+        "go/pkg/",
+        "lib/python",
+        "vendor/",
+        "packages/",
     ];
 
     for line in input.lines() {
@@ -194,11 +223,16 @@ fn filter_stack_frames(input: &str) -> String {
 }
 
 fn filter_test_pass(input: &str) -> String {
-    input.lines()
+    input
+        .lines()
         .filter(|line| {
             let t = line.trim();
-            if t.starts_with("test ") && t.ends_with(" ok") { return false; }
-            if t == "ok" || t.starts_with("test result: ") { return true; }
+            if t.starts_with("test ") && t.ends_with(" ok") {
+                return false;
+            }
+            if t == "ok" || t.starts_with("test result: ") {
+                return true;
+            }
             true
         })
         .collect::<Vec<_>>()
@@ -210,23 +244,41 @@ fn factor_common_prefix(input: &str) -> String {
     if lines.len() < 3 {
         return input.to_string();
     }
-    let non_empty: Vec<&str> = lines.iter().filter(|l| !l.trim().is_empty()).copied().collect();
-    if non_empty.len() < 3 { return input.to_string(); }
+    let non_empty: Vec<&str> = lines
+        .iter()
+        .filter(|l| !l.trim().is_empty())
+        .copied()
+        .collect();
+    if non_empty.len() < 3 {
+        return input.to_string();
+    }
 
     let first = non_empty[0];
     let mut prefix_len = 0;
     for (i, (a, b)) in first.chars().zip(non_empty[1].chars()).enumerate() {
-        if a == b { prefix_len = i + 1; } else { break; }
+        if a == b {
+            prefix_len = i + 1;
+        } else {
+            break;
+        }
     }
 
     let prefix: String = first.chars().take(prefix_len).collect();
-    if prefix.trim().is_empty() || prefix_len < 12 { return input.to_string(); }
+    if prefix.trim().is_empty() || prefix_len < 12 {
+        return input.to_string();
+    }
 
     let count = non_empty.iter().filter(|l| l.starts_with(&prefix)).count();
-    if count < 3 { return input.to_string(); }
+    if count < 3 {
+        return input.to_string();
+    }
 
     let mut out = String::new();
-    out.push_str(&format!("[common prefix: {}] ({} lines)\n", prefix.trim(), count));
+    out.push_str(&format!(
+        "[common prefix: {}] ({} lines)\n",
+        prefix.trim(),
+        count
+    ));
     for line in lines {
         if !line.trim().is_empty() && line.starts_with(&prefix) {
             out.push_str(line[prefix_len..].trim());
@@ -241,14 +293,15 @@ fn factor_common_prefix(input: &str) -> String {
 
 fn shorten_paths(input: &str) -> String {
     let re = regex::Regex::new(r#""([^"]{40,})"#).ok();
-    input.lines()
+    input
+        .lines()
         .map(|line| {
             if let Some(ref re) = re {
                 let replaced = re.replace_all(line, |caps: &regex::Captures| {
                     let path = &caps[1];
                     let segments: Vec<&str> = path.split('/').collect();
                     if segments.len() > 3 {
-                        format!("\"{}", segments[segments.len()-3..].join("/"))
+                        format!("\"{}", segments[segments.len() - 3..].join("/"))
                     } else {
                         format!("\"{}", path)
                     }
@@ -266,7 +319,11 @@ fn normalize_tokens(input: &str) -> String {
     let mut s = input.to_string();
     s = regex_replace(&s, r"\b[0-9a-fA-F]{64}\b", "<SHA256>");
     s = regex_replace(&s, r"\be?[0-9a-fA-F]{32,}\b", "<HASH>");
-    s = regex_replace(&s, r"\beyJ[A-Za-z0-9_-]{10,}\.(?:[A-Za-z0-9_-]{10,}\.)[A-Za-z0-9_-]{10,}\b", "<JWT>");
+    s = regex_replace(
+        &s,
+        r"\beyJ[A-Za-z0-9_-]{10,}\.(?:[A-Za-z0-9_-]{10,}\.)[A-Za-z0-9_-]{10,}\b",
+        "<JWT>",
+    );
     s
 }
 
@@ -338,7 +395,9 @@ mod tests {
 
     #[test]
     fn masks_hashes_and_tokens() {
-        let out = normalize_tokens("hash abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789 done");
+        let out = normalize_tokens(
+            "hash abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789 done",
+        );
         assert!(out.contains("<SHA256>"), "got: {out}");
         assert!(!out.contains("abcdef0123456789"));
     }

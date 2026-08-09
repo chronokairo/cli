@@ -46,16 +46,14 @@ async fn handle_terminal_socket(socket: WebSocket, manager: TerminalSessionManag
     let (tx_bytes, mut rx_bytes) = tokio::sync::mpsc::channel::<Vec<u8>>(256);
 
     // Blocking reader task for PTY stdout -> channel
-    let reader_task = task::spawn_blocking(move || {
-        loop {
-            let data = reader.read_available();
-            if data.is_empty() {
-                std::thread::sleep(std::time::Duration::from_millis(10));
-                continue;
-            }
-            if tx_bytes.blocking_send(data).is_err() {
-                break;
-            }
+    let reader_task = task::spawn_blocking(move || loop {
+        let data = reader.read_available();
+        if data.is_empty() {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            continue;
+        }
+        if tx_bytes.blocking_send(data).is_err() {
+            break;
         }
     });
 

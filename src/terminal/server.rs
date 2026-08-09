@@ -9,6 +9,7 @@
 //!   client → server: text frame = JSON `{"resize":{"cols":120,"rows":30}}`
 //!   server → client: binary frame = terminal output bytes
 
+use super::pty::TerminalSession;
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
@@ -22,7 +23,6 @@ use bytes::Bytes;
 use serde::Deserialize;
 use std::path::PathBuf;
 use std::sync::Arc;
-use super::pty::TerminalSession;
 
 const INDEX_HTML: &str = include_str!("index.html");
 
@@ -46,12 +46,7 @@ struct Resize {
 }
 
 /// Serve the terminal UI on `addr:port`, spawning `argv` in the PTY.
-pub async fn serve(
-    addr: &str,
-    port: u16,
-    argv: Vec<String>,
-    cwd: PathBuf,
-) -> anyhow::Result<()> {
+pub async fn serve(addr: &str, port: u16, argv: Vec<String>, cwd: PathBuf) -> anyhow::Result<()> {
     let state = AppState {
         argv: Arc::new(argv),
         cwd,
@@ -72,10 +67,7 @@ async fn index() -> impl IntoResponse {
     Html(INDEX_HTML)
 }
 
-async fn ws_handler(
-    ws: WebSocketUpgrade,
-    State(state): State<AppState>,
-) -> Response {
+async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> Response {
     ws.on_upgrade(move |socket| session(socket, state))
 }
 
@@ -95,12 +87,18 @@ async fn session(socket: WebSocket, state: AppState) {
         Ok(s) => s,
         Err(e) => {
             let shell = super::shell::default_shell_command();
-            log::warn!("failed to spawn {:?}: {e}, falling back to default shell {}", state.argv, shell);
+            log::warn!(
+                "failed to spawn {:?}: {e}, falling back to default shell {}",
+                state.argv,
+                shell
+            );
             match TerminalSession::spawn(&[shell], cols, rows, Some(&state.cwd)) {
                 Ok(s) => s,
                 Err(err) => {
                     let _ = socket
-                        .send(Message::Text(format!("failed to spawn terminal: {err}").into()))
+                        .send(Message::Text(
+                            format!("failed to spawn terminal: {err}").into(),
+                        ))
                         .await;
                     return;
                 }
@@ -108,10 +106,7 @@ async fn session(socket: WebSocket, state: AppState) {
         }
     };
 
-    log::info!(
-        "terminal session started: {:?}",
-        state.argv
-    );
+    log::info!("terminal session started: {:?}", state.argv);
 
     // Forward output → browser.
     let (out_tx, mut out_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(64);

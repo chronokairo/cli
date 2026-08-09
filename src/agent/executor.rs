@@ -199,7 +199,10 @@ async fn write_with_verification<F>(
         };
         let code = extract_code_block(&content);
         if code.trim().is_empty() {
-            hooks.warn(&format!("  ✗ model returned empty content for {}", filename));
+            hooks.warn(&format!(
+                "  ✗ model returned empty content for {}",
+                filename
+            ));
             return;
         }
         if let Err(e) = state.files.write_file(filename, &code) {
@@ -430,9 +433,16 @@ async fn execute_step_inner(
                 system, context, step.description
             );
             let result = client
-                .stream(&state.config.coder_model, &prompt, None, None, &mut |tok| {
-                    hooks.stream_text(tok);
-                }, &mut |_, _, _| {})
+                .stream(
+                    &state.config.coder_model,
+                    &prompt,
+                    None,
+                    None,
+                    &mut |tok| {
+                        hooks.stream_text(tok);
+                    },
+                    &mut |_, _, _| {},
+                )
                 .await;
             hooks.stream_text("\n");
             if let Err(e) = result {
@@ -532,7 +542,10 @@ mod tests {
     #[test]
     fn extract_path_requires_dot_or_slash() {
         use super::extract_path;
-        assert_eq!(extract_path("create src/lib.rs with helper"), Some("src/lib.rs".into()));
+        assert_eq!(
+            extract_path("create src/lib.rs with helper"),
+            Some("src/lib.rs".into())
+        );
         assert_eq!(extract_path("create main.py file"), Some("main.py".into()));
         assert_eq!(extract_path("run R script"), None);
     }

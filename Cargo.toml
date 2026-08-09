@@ -41,6 +41,10 @@ unicode-segmentation = "1"
 unicode-width = "0.2"
 diffy = "0.4"
 ignore = "0.4"
+base64 = "0.22"
+lsp-types = "0.97.0"
+tower-lsp = "0.20.0"
+parking_lot = "0.12"
 
 [dev-dependencies]
 wiremock = "0.6"

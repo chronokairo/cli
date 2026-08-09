@@ -29,7 +29,10 @@ fn style_diff_line(line: &str) -> Span<'static> {
         Span::styled(line.to_string(), Style::default())
     } else {
         // `diff --git`, `\ No newline at end of file`, etc.
-        Span::styled(line.to_string(), Style::default().add_modifier(Modifier::DIM))
+        Span::styled(
+            line.to_string(),
+            Style::default().add_modifier(Modifier::DIM),
+        )
     }
 }
 
@@ -47,7 +50,10 @@ mod tests {
 
     #[test]
     fn classifies_diff_line_prefixes() {
-        assert_eq!(style_diff_line("@@ -1,3 +1,3 @@").style.fg, Some(Color::Cyan));
+        assert_eq!(
+            style_diff_line("@@ -1,3 +1,3 @@").style.fg,
+            Some(Color::Cyan)
+        );
         assert_eq!(style_diff_line("+added").style.fg, Some(Color::Green));
         assert_eq!(style_diff_line("-removed").style.fg, Some(Color::Red));
         assert_eq!(style_diff_line(" context").style.fg, None);

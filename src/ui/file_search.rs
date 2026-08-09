@@ -237,10 +237,7 @@ mod tests {
     #[test]
     fn highlight_segments_split_match_runs() {
         let segs = highlight_segments("src/main.rs", &[4, 5, 6, 7]);
-        assert_eq!(
-            segs,
-            vec![(0, 4, false), (4, 8, true), (8, 11, false)]
-        );
+        assert_eq!(segs, vec![(0, 4, false), (4, 8, true), (8, 11, false)]);
     }
 
     #[test]
@@ -261,7 +258,10 @@ mod tests {
         std::fs::write(root.join("README.md"), "hi").unwrap();
 
         let files = walk_files(&root);
-        assert_eq!(files, vec!["README.md".to_string(), "src/main.rs".to_string()]);
+        assert_eq!(
+            files,
+            vec!["README.md".to_string(), "src/main.rs".to_string()]
+        );
 
         let _ = std::fs::remove_dir_all(&root);
     }

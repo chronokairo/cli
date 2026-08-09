@@ -44,7 +44,12 @@ pub struct TerminalSession {
 impl TerminalSession {
     /// Spawn `argv[0]` (e.g. `anamnesic tui`, `pwsh`, `cmd`) inside a fresh
     /// pseudo-terminal sized `cols` x `rows`.
-    pub fn spawn(argv: &[String], cols: u16, rows: u16, cwd: Option<&Path>) -> anyhow::Result<Self> {
+    pub fn spawn(
+        argv: &[String],
+        cols: u16,
+        rows: u16,
+        cwd: Option<&Path>,
+    ) -> anyhow::Result<Self> {
         let pty_system = native_pty_system();
         let pair = pty_system.openpty(PtySize {
             rows,

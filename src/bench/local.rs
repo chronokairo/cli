@@ -1,10 +1,12 @@
+use super::model_bench::{estimate_tps_from_catalog, names_match, BenchResult};
+use crate::hw_recommend::{detector, recommender};
+use crate::llm::infer::{
+    engine::InferenceEngine, gguf::GgufReader, model::Model, tokenizer::Tokenizer,
+};
+use crate::llm::model_resolver;
+use crate::models_dev::ModelsDevClient;
 use std::path::Path;
 use std::time::Instant;
-use crate::llm::model_resolver;
-use crate::llm::infer::{engine::InferenceEngine, gguf::GgufReader, model::Model, tokenizer::Tokenizer};
-use crate::hw_recommend::{detector, recommender};
-use crate::models_dev::ModelsDevClient;
-use super::model_bench::{BenchResult, names_match, estimate_tps_from_catalog};
 
 const BENCH_PROMPT: &str = "Write a Python function that computes fibonacci numbers.";
 const BENCH_TOKENS: usize = 20;
@@ -53,14 +55,20 @@ pub fn benchmark_model(name: &str, models_dir: &Path) -> BenchResult {
             let _ = tx.send(res);
         });
         match rx.recv_timeout(std::time::Duration::from_secs(BENCH_TIMEOUT_SECS)) {
-            Ok(Ok(r))  => r,
+            Ok(Ok(r)) => r,
             Ok(Err(e)) => return BenchResult::error(name, format!("generate: {e}")),
-            Err(_)     => return BenchResult::error(name, format!("timeout after {BENCH_TIMEOUT_SECS}s")),
+            Err(_) => {
+                return BenchResult::error(name, format!("timeout after {BENCH_TIMEOUT_SECS}s"))
+            }
         }
     };
     let gen_ms = t1.elapsed().as_millis() as u64;
 
-    let tps = if gen_ms > 0 { tokens_out as f32 / (gen_ms as f32 / 1000.0) } else { 0.0 };
+    let tps = if gen_ms > 0 {
+        tokens_out as f32 / (gen_ms as f32 / 1000.0)
+    } else {
+        0.0
+    };
     let sample: String = output.chars().take(80).collect();
 
     println!(" done ({tokens_out} tok, {tps:.1} tok/s)");
@@ -93,11 +101,15 @@ pub fn rank_models(models_dir: &Path, category: &str) -> Vec<BenchResult> {
         .collect();
 
     println!("\n══════════════════════════════════════════════");
-    println!("  Hardware: {} | RAM: {}GB | GPU: {}",
+    println!(
+        "  Hardware: {} | RAM: {}GB | GPU: {}",
         hw.cpu_brand.split_whitespace().last().unwrap_or("CPU"),
         hw.memory_total_gb,
-        if hw.has_dedicated_gpu { format!("{} ({}GB VRAM)", hw.gpu_model, hw.gpu_vram_gb) }
-        else { format!("{} (integrated)", hw.gpu_model) }
+        if hw.has_dedicated_gpu {
+            format!("{} ({}GB VRAM)", hw.gpu_model, hw.gpu_vram_gb)
+        } else {
+            format!("{} (integrated)", hw.gpu_model)
+        }
     );
     println!("  Benchmarking {} local models...", to_bench.len());
     println!("══════════════════════════════════════════════\n");
@@ -106,7 +118,9 @@ pub fn rank_models(models_dir: &Path, category: &str) -> Vec<BenchResult> {
         .iter()
         .map(|name| {
             let mut r = benchmark_model(name, models_dir);
-            if let Some((rank, rec)) = hw_recs.iter().enumerate()
+            if let Some((rank, rec)) = hw_recs
+                .iter()
+                .enumerate()
                 .find(|(_, rec)| names_match(rec.model.name, name))
             {
                 r.hw_score = Some(rec.score.total);
@@ -118,12 +132,13 @@ pub fn rank_models(models_dir: &Path, category: &str) -> Vec<BenchResult> {
         })
         .collect();
 
-    results.sort_by(|a, b| {
-        match (a.error.is_none(), b.error.is_none()) {
-            (true, false) => std::cmp::Ordering::Less,
-            (false, true) => std::cmp::Ordering::Greater,
-            _ => b.tps.partial_cmp(&a.tps).unwrap_or(std::cmp::Ordering::Equal),
-        }
+    results.sort_by(|a, b| match (a.error.is_none(), b.error.is_none()) {
+        (true, false) => std::cmp::Ordering::Less,
+        (false, true) => std::cmp::Ordering::Greater,
+        _ => b
+            .tps
+            .partial_cmp(&a.tps)
+            .unwrap_or(std::cmp::Ordering::Equal),
     });
 
     results

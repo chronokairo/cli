@@ -1,5 +1,5 @@
-use std::collections::HashMap;
 use crate::llm::infer::gguf::GgufReader;
+use std::collections::HashMap;
 
 pub struct Tokenizer {
     pub vocab: Vec<String>,
@@ -17,8 +17,10 @@ impl Tokenizer {
         let model_type = reader.get_metadata_str("tokenizer.ggml.model", "");
         let is_bpe = model_type == "gpt2" || model_type == "bpe";
 
-        let n_vocab = reader.get_metadata_int("tokenizer.ggml.vocab_size",
-            reader.get_metadata_int("llama.vocab_size", 32000)) as usize;
+        let n_vocab = reader.get_metadata_int(
+            "tokenizer.ggml.vocab_size",
+            reader.get_metadata_int("llama.vocab_size", 32000),
+        ) as usize;
 
         let mut vocab = Vec::with_capacity(n_vocab);
         let mut token_to_id = HashMap::new();
@@ -27,7 +29,11 @@ impl Tokenizer {
             let key1 = format!("tokenizer.ggml.tokens_{}", i);
             let key2 = format!("tokenizer.ggml.tokens[{}]", i);
             let token_str = reader.get_metadata_str(&key1, "");
-            let token_str = if token_str.is_empty() { reader.get_metadata_str(&key2, "") } else { token_str };
+            let token_str = if token_str.is_empty() {
+                reader.get_metadata_str(&key2, "")
+            } else {
+                token_str
+            };
             vocab.push(token_str.clone());
             if !token_str.is_empty() {
                 token_to_id.insert(token_str, i as u32);
@@ -38,18 +44,26 @@ impl Tokenizer {
         let eos_id = reader.get_metadata_int("tokenizer.ggml.eos_token_id", 2) as u32;
         let pad_id = reader.get_metadata_int("tokenizer.ggml.pad_token_id", 0) as u32;
 
-        log::info!("Tokenizer: vocab_size={} bos={} eos={}", vocab.len(), bos_id, eos_id);
+        log::info!(
+            "Tokenizer: vocab_size={} bos={} eos={}",
+            vocab.len(),
+            bos_id,
+            eos_id
+        );
 
         let mut merges = Vec::new();
         if is_bpe {
             for i in 0.. {
                 let key = format!("tokenizer.ggml.merges_{}", i);
                 let merge_str = reader.get_metadata_str(&key, "");
-                if merge_str.is_empty() { break; }
+                if merge_str.is_empty() {
+                    break;
+                }
                 if let Some(space) = merge_str.find(' ') {
                     let left = &merge_str[..space];
                     let right = &merge_str[space + 1..];
-                    if let (Some(&li), Some(&ri)) = (token_to_id.get(left), token_to_id.get(right)) {
+                    if let (Some(&li), Some(&ri)) = (token_to_id.get(left), token_to_id.get(right))
+                    {
                         let merged = format!("{}{}", left, right);
                         if let Some(&ni) = token_to_id.get(&merged) {
                             merges.push((li, ri, ni));
@@ -60,7 +74,16 @@ impl Tokenizer {
             log::info!("  BPE merges: {}", merges.len());
         }
 
-        Ok(Tokenizer { vocab, token_to_id, bos_id, eos_id, pad_id, add_bos: false, is_bpe, merges })
+        Ok(Tokenizer {
+            vocab,
+            token_to_id,
+            bos_id,
+            eos_id,
+            pad_id,
+            add_bos: false,
+            is_bpe,
+            merges,
+        })
     }
 
     pub fn encode(&self, text: &str, max_len: usize) -> Vec<u32> {
@@ -87,11 +110,16 @@ impl Tokenizer {
         let mut ids = Vec::new();
 
         for word in &word_chunks {
-            let mut word_ids: Vec<u32> = word.bytes().map(|b| {
-                let cp = byte_table[b as usize];
-                let utf8 = char::from_u32(cp).map(|c| c.to_string()).unwrap_or_default();
-                self.token_to_id.get(&utf8).copied().unwrap_or(b as u32)
-            }).collect();
+            let mut word_ids: Vec<u32> = word
+                .bytes()
+                .map(|b| {
+                    let cp = byte_table[b as usize];
+                    let utf8 = char::from_u32(cp)
+                        .map(|c| c.to_string())
+                        .unwrap_or_default();
+                    self.token_to_id.get(&utf8).copied().unwrap_or(b as u32)
+                })
+                .collect();
 
             let mut changed = true;
             while changed && ids.len() + word_ids.len() < max_len {
@@ -116,7 +144,9 @@ impl Tokenizer {
                 }
             }
             ids.extend(word_ids);
-            if ids.len() >= max_len { break; }
+            if ids.len() >= max_len {
+                break;
+            }
         }
         ids.truncate(max_len);
         ids
@@ -135,7 +165,7 @@ impl Tokenizer {
             let max_look = (chars.len() - i).min(48);
             let mut matched = false;
             for len in (1..=max_look).rev() {
-                let s: String = chars[i..i+len].iter().collect();
+                let s: String = chars[i..i + len].iter().collect();
                 if let Some(&id) = self.token_to_id.get(&s) {
                     result.push(id);
                     i += len;
@@ -145,7 +175,7 @@ impl Tokenizer {
             }
             if !matched {
                 // byte-level fallback using <0xNN> tokens
-                let ch: String = chars[i..i+1].iter().collect();
+                let ch: String = chars[i..i + 1].iter().collect();
                 for b in ch.as_bytes() {
                     let key = format!("<0x{:02X}>", b);
                     if let Some(&id) = self.token_to_id.get(&key) {
@@ -183,7 +213,9 @@ impl Tokenizer {
                     current.clear();
                 }
             }
-            if result.len() >= max_len - 1 { break; }
+            if result.len() >= max_len - 1 {
+                break;
+            }
         }
         if !current.is_empty() {
             if let Some(&id) = self.token_to_id.get(&current) {
@@ -214,11 +246,15 @@ fn gpt2_pretokenize(text: &str) -> Vec<String> {
     let bytes = text.as_bytes();
     while i < bytes.len() {
         let start = i;
-        while i < bytes.len() && bytes[i].is_ascii_whitespace() { i += 1; }
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
         let spaces = std::str::from_utf8(&bytes[start..i]).unwrap_or("");
 
         let start = i;
-        while i < bytes.len() && !bytes[i].is_ascii_whitespace() { i += 1; }
+        while i < bytes.len() && !bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
         let content = std::str::from_utf8(&bytes[start..i]).unwrap_or("");
 
         if !content.is_empty() {

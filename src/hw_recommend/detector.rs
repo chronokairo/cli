@@ -95,7 +95,12 @@ fn detect_cpu() -> CpuInfo {
         })
         .unwrap_or(2.0);
 
-    CpuInfo { brand, cores, physical_cores, ghz }
+    CpuInfo {
+        brand,
+        cores,
+        physical_cores,
+        ghz,
+    }
 }
 
 struct MemInfo {
@@ -152,11 +157,15 @@ fn detect_gpu() -> GpuInfo {
 
 fn detect_gpu_nvidia() -> Option<(String, String, u32)> {
     let info = fs::read_to_string("/proc/driver/nvidia/gpus/0/information").ok()?;
-    let model = info.lines()
+    let model = info
+        .lines()
         .find(|l| l.starts_with("Model"))?
-        .split(':').nth(1)?
-        .trim().to_string();
-    let vram_mb = info.lines()
+        .split(':')
+        .nth(1)?
+        .trim()
+        .to_string();
+    let vram_mb = info
+        .lines()
         .find(|l| l.starts_with("Total"))
         .and_then(|l| {
             l.split_whitespace()

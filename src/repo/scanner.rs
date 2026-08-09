@@ -1,5 +1,5 @@
-use std::path::Path;
 use regex::Regex;
+use std::path::Path;
 
 #[derive(Debug, Clone)]
 pub struct SymbolEntry {
@@ -73,13 +73,19 @@ impl RepoMapGenerator {
                 current_file = sym.file_path.clone();
                 lines.push(format!("\nFile `{}`:", current_file));
             }
-            lines.push(format!("  L{:<4} {} {}", sym.line_number, sym.symbol_type, sym.name));
+            lines.push(format!(
+                "  L{:<4} {} {}",
+                sym.line_number, sym.symbol_type, sym.name
+            ));
         }
 
         let full = lines.join("\n");
         if full.len() > max_bytes {
             let truncated: String = full.chars().take(max_bytes).collect();
-            format!("{}\n...[repo map truncated at {} bytes]", truncated, max_bytes)
+            format!(
+                "{}\n...[repo map truncated at {} bytes]",
+                truncated, max_bytes
+            )
         } else {
             full
         }
@@ -100,7 +106,15 @@ impl RepoMapGenerator {
         };
 
         const SKIPPED: &[&str] = &[
-            ".git", "target", "node_modules", "vendor", "dist", "build", ".idea", ".vscode", "brain",
+            ".git",
+            "target",
+            "node_modules",
+            "vendor",
+            "dist",
+            "build",
+            ".idea",
+            ".vscode",
+            "brain",
         ];
 
         let mut sorted_entries = Vec::new();
@@ -133,10 +147,12 @@ impl RepoMapGenerator {
         };
 
         let fn_re = Regex::new(r"^\s*(pub\s+|async\s+)*fn\s+([a-zA-Z0-9_]+)").unwrap();
-        let struct_re = Regex::new(r"^\s*(pub\s+)*(struct|enum|trait|type|union)\s+([a-zA-Z0-9_]+)").unwrap();
+        let struct_re =
+            Regex::new(r"^\s*(pub\s+)*(struct|enum|trait|type|union)\s+([a-zA-Z0-9_]+)").unwrap();
         let py_fn_re = Regex::new(r"^\s*(async\s+)?def\s+([a-zA-Z0-9_]+)").unwrap();
         let py_class_re = Regex::new(r"^\s*class\s+([a-zA-Z0-9_]+)").unwrap();
-        let js_fn_re = Regex::new(r"^\s*(export\s+)?(async\s+)?function\s+([a-zA-Z0-9_]+)").unwrap();
+        let js_fn_re =
+            Regex::new(r"^\s*(export\s+)?(async\s+)?function\s+([a-zA-Z0-9_]+)").unwrap();
         let js_class_re = Regex::new(r"^\s*(export\s+)?class\s+([a-zA-Z0-9_]+)").unwrap();
 
         for (line_idx, line) in content.lines().enumerate() {
@@ -173,7 +189,11 @@ impl RepoMapGenerator {
                         line_number: line_num,
                     });
                 }
-            } else if rel_path.ends_with(".js") || rel_path.ends_with(".ts") || rel_path.ends_with(".tsx") || rel_path.ends_with(".jsx") {
+            } else if rel_path.ends_with(".js")
+                || rel_path.ends_with(".ts")
+                || rel_path.ends_with(".tsx")
+                || rel_path.ends_with(".jsx")
+            {
                 if let Some(caps) = js_fn_re.captures(line) {
                     symbols.push(SymbolEntry {
                         file_path: rel_path.to_string(),
@@ -202,7 +222,11 @@ mod tests {
     fn generates_repo_map_for_rust_project() {
         let temp = std::env::temp_dir().join(format!("test_repomap_{}", std::process::id()));
         std::fs::create_dir_all(temp.join("src")).unwrap();
-        std::fs::write(temp.join("src/lib.rs"), "pub fn parse_input() {}\npub struct Data {}\n").unwrap();
+        std::fs::write(
+            temp.join("src/lib.rs"),
+            "pub fn parse_input() {}\npub struct Data {}\n",
+        )
+        .unwrap();
 
         let map = RepoMapGenerator::generate_map(&temp, 1000);
         assert!(map.contains("File `src/lib.rs`:"));

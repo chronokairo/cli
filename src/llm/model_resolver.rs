@@ -1,5 +1,5 @@
+use anyhow::{bail, Result};
 use std::path::{Path, PathBuf};
-use anyhow::{Result, bail};
 
 /// Resolves a model name (e.g. "gemma3:1b") or a direct path to a GGUF blob path.
 ///
@@ -32,7 +32,10 @@ pub fn resolve_model(name_or_path: &str, models_dir: &Path) -> Result<PathBuf> {
 pub fn list_models(models_dir: &Path) -> Vec<String> {
     let mut models = Vec::new();
     for root in candidate_roots(models_dir) {
-        let manifests_root = root.join("manifests").join("registry.ollama.ai").join("library");
+        let manifests_root = root
+            .join("manifests")
+            .join("registry.ollama.ai")
+            .join("library");
         if let Ok(entries) = std::fs::read_dir(&manifests_root) {
             for entry in entries.flatten() {
                 let model_name = entry.file_name().to_string_lossy().to_string();
@@ -85,13 +88,16 @@ fn try_resolve(name: &str, root: &Path) -> Option<PathBuf> {
     let digest = manifest["layers"]
         .as_array()?
         .iter()
-        .find(|l| l["mediaType"].as_str().is_some_and(|m| m.contains("model")))?
-        ["digest"]
+        .find(|l| l["mediaType"].as_str().is_some_and(|m| m.contains("model")))?["digest"]
         .as_str()?
         .replace("sha256:", "sha256-");
 
     let blob = root.join("blobs").join(&digest);
-    if blob.exists() { Some(blob) } else { None }
+    if blob.exists() {
+        Some(blob)
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -162,10 +168,18 @@ mod tests {
         write_manifest(&root, "qwen3", "latest", "b2");
         write_manifest(&root, "gemma3", "4b", "b3");
         let models = list_models(&root);
-        assert!(models.contains(&"qwen3:1.7b".to_string()), "got: {models:?}");
+        assert!(
+            models.contains(&"qwen3:1.7b".to_string()),
+            "got: {models:?}"
+        );
         assert!(models.contains(&"qwen3:latest".to_string()));
         assert!(models.contains(&"gemma3:4b".to_string()));
-        assert!(models.iter().all(|a| models.iter().filter(|b| *b == a).count() == 1), "no duplicates");
+        assert!(
+            models
+                .iter()
+                .all(|a| models.iter().filter(|b| *b == a).count() == 1),
+            "no duplicates"
+        );
         let _ = fs::remove_dir_all(&root);
     }
 

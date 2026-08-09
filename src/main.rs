@@ -3,6 +3,7 @@
 #![allow(dead_code)]
 
 mod agent;
+mod app_server;
 mod bench;
 mod compressor;
 mod config;
@@ -11,6 +12,7 @@ mod llm;
 mod mcp;
 mod memory;
 mod models_dev;
+mod protocol;
 mod providers;
 mod repo;
 mod skills;
@@ -22,6 +24,7 @@ mod ui;
 use agent::agent_loop::run_agent_loop;
 use agent::state::AgentState;
 use anyhow::Result;
+use app_server::AppServer;
 use clap::{Parser, Subcommand};
 use config::settings::Config;
 use llm::client::LlmClient;
@@ -31,9 +34,11 @@ use llm::infer::model::Model;
 use llm::infer::tokenizer::Tokenizer;
 use llm::model_resolver;
 use llm::router::{LlmRouter, DEFAULT_CLOUD_MODEL, DEFAULT_PROVIDER};
+use mcp::server::McpServer;
 use std::fs::{File, OpenOptions};
 use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
 /// Minimal logger that writes structured lines to `anamnesic.log` instead of
@@ -160,6 +165,24 @@ enum Commands {
         #[arg(long)]
         cloud: bool,
     },
+    /// Run a coding task headlessly (non-interactive)
+    Exec {
+        /// Task to execute
+        task: String,
+        /// Run in plan mode (generate plan first)
+        #[arg(long)]
+        plan: bool,
+        /// Output events as JSON Lines
+        #[arg(long)]
+        jsonl: bool,
+        /// Auto-approve all approvals (for CI)
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Run JSON-RPC 2.0 app server over stdio (for IDE integration)
+    AppServer,
+    /// Run MCP server exposing the harness as tools
+    McpServer,
 }
 
 /// Sub-actions for `rust-agent providers`
@@ -358,6 +381,34 @@ async fn main() -> Result<()> {
             ];
             terminal::server::serve(&host, port, argv, state.config.workspace_dir.clone()).await?;
         }
+        Some(Commands::Exec {
+            task,
+            plan,
+            jsonl,
+            yes,
+        }) => {
+            let hooks = build_exec_hooks(jsonl, yes);
+            crate::agent::agent_loop::run_agent_loop_with_hooks(
+                &client,
+                &mut state,
+                &task,
+                &hooks,
+                if plan {
+                    crate::ui::AgentMode::Plan
+                } else {
+                    crate::ui::AgentMode::Agent
+                },
+            )
+            .await;
+        }
+        Some(Commands::AppServer) => {
+            let server = AppServer::new(client, state);
+            server.run_stdio()?;
+        }
+        Some(Commands::McpServer) => {
+            let server = McpServer::new(client, state);
+            server.run_stdio()?;
+        }
         None => {
             if let Some(task) = cli.task {
                 run_agent_loop(&client, &mut state, &task).await;
@@ -475,6 +526,123 @@ async fn hw_check() -> Result<()> {
     Ok(())
 }
 
+fn build_exec_hooks(jsonl: bool, yes: bool) -> crate::agent::agent_loop::AgentHooks {
+    use crate::agent::agent_loop::{AgentEvent, AgentHooks, ApprovalDecision, ApprovalRequest};
+    let interrupt = Arc::new(AtomicBool::new(false));
+
+    AgentHooks {
+        on_event: Some(Arc::new(move |ev: AgentEvent| {
+            if jsonl {
+                let event_json = match ev {
+                    AgentEvent::Status(text) => serde_json::json!({"type": "note", "text": text}),
+                    AgentEvent::ToolCall { name, summary } => {
+                        serde_json::json!({"type": "tool_call", "name": name, "summary": summary})
+                    }
+                    AgentEvent::ToolCallDelta {
+                        index,
+                        name,
+                        args_delta,
+                    } => {
+                        serde_json::json!({"type": "tool_call_delta", "index": index, "name": name, "args_delta": args_delta})
+                    }
+                    AgentEvent::PlanStep {
+                        index,
+                        total,
+                        description,
+                    } => {
+                        serde_json::json!({"type": "plan_step", "index": index, "total": total, "description": description})
+                    }
+                    AgentEvent::FileChanged { path } => {
+                        serde_json::json!({"type": "file_changed", "path": path})
+                    }
+                    AgentEvent::Verification {
+                        status,
+                        command,
+                        summary,
+                    } => {
+                        serde_json::json!({"type": "verification", "status": status, "command": command, "summary": summary})
+                    }
+                    AgentEvent::Transaction { action, summary } => {
+                        serde_json::json!({"type": "transaction", "action": action, "summary": summary})
+                    }
+                    AgentEvent::TextDelta { text } => {
+                        serde_json::json!({"type": "text_delta", "text": text})
+                    }
+                    AgentEvent::TokenUsage {
+                        prompt_tokens,
+                        completion_tokens,
+                        reasoning_tokens,
+                        total_tokens,
+                    } => {
+                        serde_json::json!({"type": "token_usage", "prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens, "reasoning_tokens": reasoning_tokens, "total_tokens": total_tokens})
+                    }
+                    AgentEvent::ReasoningDelta { text } => {
+                        serde_json::json!({"type": "reasoning_delta", "text": text})
+                    }
+                    AgentEvent::ResetReasoning => serde_json::json!({"type": "reset_reasoning"}),
+                    AgentEvent::Routing { summary } => {
+                        serde_json::json!({"type": "routing", "summary": summary})
+                    }
+                    AgentEvent::Done { message } => {
+                        serde_json::json!({"type": "done", "message": message})
+                    }
+                    AgentEvent::Failed { message } => {
+                        serde_json::json!({"type": "failed", "message": message})
+                    }
+                    AgentEvent::Interrupted => serde_json::json!({"type": "interrupted"}),
+                };
+                println!("{}", serde_json::to_string(&event_json).unwrap_or_default());
+            } else {
+                match ev {
+                    AgentEvent::Status(text) => println!("  {}", text),
+                    AgentEvent::ToolCall { name, summary } => println!("  → {}: {}", name, summary),
+                    AgentEvent::PlanStep {
+                        index,
+                        total,
+                        description,
+                    } => println!("  [{}/{}] {}", index, total, description),
+                    AgentEvent::FileChanged { path } => println!("  Δ {}", path),
+                    AgentEvent::Verification {
+                        status,
+                        command,
+                        summary,
+                    } => {
+                        let cmd = command.unwrap_or_else(|| "auto-detect".into());
+                        println!("  ✓ verify [{}]: {} — {}", status, cmd, summary);
+                    }
+                    AgentEvent::Transaction { action, summary } => {
+                        println!("  ↺ transaction [{}]: {}", action, summary)
+                    }
+                    AgentEvent::Done { message } => {
+                        if !message.trim().is_empty() {
+                            println!("\n[agent] {}", message.trim());
+                        }
+                    }
+                    AgentEvent::Failed { message } => {
+                        eprintln!("\n[agent failed] {}", message.trim())
+                    }
+                    AgentEvent::Interrupted => eprintln!("\n[interrupted]"),
+                    _ => {}
+                }
+            }
+        })),
+        on_approval: Some(Arc::new(move |req: ApprovalRequest| {
+            if yes {
+                println!("  [auto-approve] {} — {}", req.tool, req.summary);
+                return ApprovalDecision::AllowOnce;
+            }
+            // Non-interactive: deny by default
+            eprintln!(
+                "  [denied] {} — {} (use --yes to auto-approve)",
+                req.tool, req.summary
+            );
+            ApprovalDecision::Deny
+        })),
+        interrupt: Some(interrupt),
+        ..Default::default()
+    }
+}
+
 /// Returns the list of cloud models to benchmark, all via NVIDIA NIM.
 fn get_cloud_models() -> Vec<(String, String, String, String, f64)> {
     let api_key = std::env::var("NVIDIA_API_KEY").unwrap_or_default();
@@ -579,7 +747,9 @@ async fn handle_providers(action: ProvidersAction) -> Result<()> {
                 .get(&provider)
                 .and_then(|p| p.env.first().map(|s| s.as_str()))
                 .map(|s| s.to_string())
-                .unwrap_or_else(|| format!("{}_API_KEY", provider.to_uppercase().replace('-', "_")));
+                .unwrap_or_else(|| {
+                    format!("{}_API_KEY", provider.to_uppercase().replace('-', "_"))
+                });
             let mut globals = config::GlobalSettings::load();
             globals.set_env(&env_name, &key);
             globals.save().ok();

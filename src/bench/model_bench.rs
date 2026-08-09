@@ -1,18 +1,20 @@
+use anyhow::Result;
+use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
-use anyhow::Result;
-use serde::{Serialize, Deserialize};
 
+use crate::hw_recommend::{catalog, detector, recommender, scoring};
+use crate::llm::infer::{
+    engine::InferenceEngine, gguf::GgufReader, model::Model, tokenizer::Tokenizer,
+};
 use crate::llm::model_resolver;
-use crate::llm::infer::{engine::InferenceEngine, gguf::GgufReader, model::Model, tokenizer::Tokenizer};
-use crate::hw_recommend::{detector, recommender, catalog, scoring};
-use crate::models_dev::{ModelsDevClient, CloudMatch};
 use crate::llm::provider_chain::FallbackChain;
+use crate::models_dev::{CloudMatch, ModelsDevClient};
 
 const BENCH_PROMPT: &str = "Write a Python function that computes fibonacci numbers.";
-const BENCH_TOKENS: usize = 20;   // enough to measure TPS without hanging for minutes
-const BENCH_TEMP: f32 = 0.0;      // greedy for reproducibility
+const BENCH_TOKENS: usize = 20; // enough to measure TPS without hanging for minutes
+const BENCH_TEMP: f32 = 0.0; // greedy for reproducibility
 const BENCH_TIMEOUT_SECS: u64 = 120; // skip models that take longer than 2 min
 
 /// Models to skip — not inference models.
@@ -78,14 +80,20 @@ pub fn benchmark_model(name: &str, models_dir: &Path) -> BenchResult {
             let _ = tx.send(res);
         });
         match rx.recv_timeout(std::time::Duration::from_secs(BENCH_TIMEOUT_SECS)) {
-            Ok(Ok(r))  => r,
+            Ok(Ok(r)) => r,
             Ok(Err(e)) => return BenchResult::error(name, format!("generate: {e}")),
-            Err(_)     => return BenchResult::error(name, format!("timeout after {BENCH_TIMEOUT_SECS}s")),
+            Err(_) => {
+                return BenchResult::error(name, format!("timeout after {BENCH_TIMEOUT_SECS}s"))
+            }
         }
     };
     let gen_ms = t1.elapsed().as_millis() as u64;
 
-    let tps = if gen_ms > 0 { tokens_out as f32 / (gen_ms as f32 / 1000.0) } else { 0.0 };
+    let tps = if gen_ms > 0 {
+        tokens_out as f32 / (gen_ms as f32 / 1000.0)
+    } else {
+        0.0
+    };
     let sample: String = output.chars().take(80).collect();
 
     println!(" done ({tokens_out} tok, {tps:.1} tok/s)");
@@ -122,13 +130,21 @@ pub fn rank_models(models_dir: &Path, category: &str) -> Vec<BenchResult> {
         .collect();
 
     println!("\n══════════════════════════════════════════════");
-    println!("  Hardware: {} | RAM: {}GB | GPU: {}",
+    println!(
+        "  Hardware: {} | RAM: {}GB | GPU: {}",
         hw.cpu_brand.split_whitespace().last().unwrap_or("CPU"),
         hw.memory_total_gb,
-        if hw.has_dedicated_gpu { format!("{} ({}GB VRAM)", hw.gpu_model, hw.gpu_vram_gb) }
-        else { format!("{} (integrated)", hw.gpu_model) }
+        if hw.has_dedicated_gpu {
+            format!("{} ({}GB VRAM)", hw.gpu_model, hw.gpu_vram_gb)
+        } else {
+            format!("{} (integrated)", hw.gpu_model)
+        }
     );
-    println!("  Benchmarking {} models — prompt: {} tokens out", to_bench.len(), BENCH_TOKENS);
+    println!(
+        "  Benchmarking {} models — prompt: {} tokens out",
+        to_bench.len(),
+        BENCH_TOKENS
+    );
     println!("══════════════════════════════════════════════\n");
 
     let mut results: Vec<BenchResult> = to_bench
@@ -136,7 +152,9 @@ pub fn rank_models(models_dir: &Path, category: &str) -> Vec<BenchResult> {
         .map(|name| {
             let mut r = benchmark_model(name, models_dir);
             // Attach hw_recommend data where available
-            if let Some((rank, rec)) = hw_recs.iter().enumerate()
+            if let Some((rank, rec)) = hw_recs
+                .iter()
+                .enumerate()
                 .find(|(_, rec)| names_match(rec.model.name, name))
             {
                 r.hw_score = Some(rec.score.total);
@@ -150,12 +168,13 @@ pub fn rank_models(models_dir: &Path, category: &str) -> Vec<BenchResult> {
         .collect();
 
     // Sort: successful models by TPS desc, errors at the end
-    results.sort_by(|a, b| {
-        match (a.error.is_none(), b.error.is_none()) {
-            (true, false) => std::cmp::Ordering::Less,
-            (false, true) => std::cmp::Ordering::Greater,
-            _ => b.tps.partial_cmp(&a.tps).unwrap_or(std::cmp::Ordering::Equal),
-        }
+    results.sort_by(|a, b| match (a.error.is_none(), b.error.is_none()) {
+        (true, false) => std::cmp::Ordering::Less,
+        (false, true) => std::cmp::Ordering::Greater,
+        _ => b
+            .tps
+            .partial_cmp(&a.tps)
+            .unwrap_or(std::cmp::Ordering::Equal),
     });
 
     results
@@ -176,8 +195,13 @@ impl BenchResult {
         println!("  [{model}] ERROR: {msg}");
         BenchResult {
             model: model.to_string(),
-            load_ms: 0, gen_ms: 0, tokens_out: 0, tps: 0.0,
-            hw_score: None, predicted_tps: None, hw_rank: None,
+            load_ms: 0,
+            gen_ms: 0,
+            tokens_out: 0,
+            tps: 0.0,
+            hw_score: None,
+            predicted_tps: None,
+            hw_rank: None,
             output_sample: String::new(),
             error: Some(msg),
             cloud_match: None,
@@ -188,11 +212,15 @@ impl BenchResult {
 /// Fuzzy name match between catalog name (e.g. "llama3.2:3b") and local name (e.g. "llama3.2:3b").
 /// Also handles "mistral:7b" ↔ "mistral:latest".
 pub(crate) fn names_match(catalog: &str, local: &str) -> bool {
-    if catalog == local { return true; }
+    if catalog == local {
+        return true;
+    }
     // strip tags and compare families
     let cfam = catalog.split(':').next().unwrap_or(catalog);
     let lfam = local.split(':').next().unwrap_or(local);
-    if cfam != lfam { return false; }
+    if cfam != lfam {
+        return false;
+    }
     // same family — match if tags are compatible
     let ctag = catalog.split(':').nth(1).unwrap_or("latest");
     let ltag = local.split(':').nth(1).unwrap_or("latest");
@@ -207,9 +235,13 @@ pub(crate) fn estimate_tps_from_catalog(
     let score = scoring::score_model(hw, model, category);
     // Back-compute estimated TPS from speed score × target
     const TARGET_SPEEDS: &[(&str, f64)] = &[
-        ("general", 40.0), ("coding", 40.0), ("reasoning", 25.0), ("chat", 50.0),
+        ("general", 40.0),
+        ("coding", 40.0),
+        ("reasoning", 25.0),
+        ("chat", 50.0),
     ];
-    let target = TARGET_SPEEDS.iter()
+    let target = TARGET_SPEEDS
+        .iter()
         .find(|(c, _)| *c == category)
         .map(|(_, s)| *s)
         .unwrap_or(40.0);
@@ -246,7 +278,11 @@ pub async fn benchmark_cloud_model(
         Ok(Ok(text)) => {
             let tokens_out = text.split_whitespace().count();
             let gen_ms = elapsed.as_millis() as u64;
-            let tps = if gen_ms > 0 { tokens_out as f32 / (gen_ms as f32 / 1000.0) } else { 0.0 };
+            let tps = if gen_ms > 0 {
+                tokens_out as f32 / (gen_ms as f32 / 1000.0)
+            } else {
+                0.0
+            };
             let sample: String = text.chars().take(80).collect();
 
             BenchResult {
@@ -264,19 +300,23 @@ pub async fn benchmark_cloud_model(
             }
         }
         Ok(Err(e)) => BenchResult::error(model_id, format!("provider error: {e}")),
-        Err(_) => BenchResult::error(model_id, format!("timeout after {CLOUD_BENCH_TIMEOUT_SECS}s")),
+        Err(_) => BenchResult::error(
+            model_id,
+            format!("timeout after {CLOUD_BENCH_TIMEOUT_SECS}s"),
+        ),
     }
 }
 
 /// Build a FallbackChain for a specific cloud model via NIM.
-fn build_cloud_chain(
-    api_key: &str,
-    model_id: &str,
-    rpm: f64,
-) -> FallbackChain {
-    use crate::llm::provider_chain::{NimProvider, LocalProvider, CompletionProvider};
+fn build_cloud_chain(api_key: &str, model_id: &str, rpm: f64) -> FallbackChain {
+    use crate::llm::provider_chain::{CompletionProvider, LocalProvider, NimProvider};
 
-    let nim = Arc::new(NimProvider::new("https://integrate.api.nvidia.com", api_key.to_string(), model_id.to_string(), rpm));
+    let nim = Arc::new(NimProvider::new(
+        "https://integrate.api.nvidia.com",
+        api_key.to_string(),
+        model_id.to_string(),
+        rpm,
+    ));
     let local = Arc::new(LocalProvider::new(
         "http://localhost:11434".to_string(),
         "nemotron-3-nano".to_string(),
@@ -297,7 +337,9 @@ pub async fn rank_cloud_models(
         results.push(result);
     }
     results.sort_by(|a, b| {
-        b.tps.partial_cmp(&a.tps).unwrap_or(std::cmp::Ordering::Equal)
+        b.tps
+            .partial_cmp(&a.tps)
+            .unwrap_or(std::cmp::Ordering::Equal)
     });
     results
 }

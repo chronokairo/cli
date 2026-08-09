@@ -1,5 +1,5 @@
 mod store;
 mod verify;
 
-pub use store::{ProviderStore, ProviderEntry, print_store, load_dotenv};
+pub use store::{load_dotenv, print_store, ProviderEntry, ProviderStore};
 pub use verify::test_provider;
