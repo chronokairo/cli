@@ -381,6 +381,163 @@ impl ToolExecutionResult {
     }
 }
 
+fn value_to_tool_call(val: &serde_json::Value) -> Option<crate::llm::client::ToolCall> {
+    use crate::llm::client::{ToolCall, ToolCallFunction};
+
+    // Format A: Standard ToolCall {"type": "function", "function": {"name": "...", "arguments": ...}}
+    if let Some(func) = val.get("function").and_then(|f| f.as_object()) {
+        let name = func.get("name").and_then(|n| n.as_str())?.to_string();
+        let args = if let Some(args_val) = func.get("arguments") {
+            if let Some(s) = args_val.as_str() {
+                s.to_string()
+            } else {
+                serde_json::to_string(args_val).unwrap_or_default()
+            }
+        } else {
+            "{}".to_string()
+        };
+        return Some(ToolCall {
+            id: val
+                .get("id")
+                .and_then(|id| id.as_str())
+                .unwrap_or("")
+                .to_string(),
+            r#type: "function".to_string(),
+            function: ToolCallFunction {
+                name,
+                arguments: args,
+            },
+        });
+    }
+
+    // Format B: Direct {"name": "...", "arguments": ...} or {"name": "...", "parameters": ...} or {"tool": "...", ...}
+    let name_opt = val
+        .get("name")
+        .or_else(|| val.get("tool"))
+        .or_else(|| val.get("action"))
+        .and_then(|v| v.as_str());
+
+    if let Some(name) = name_opt {
+        let args_val_opt = val
+            .get("arguments")
+            .or_else(|| val.get("parameters"))
+            .or_else(|| val.get("args"))
+            .or_else(|| val.get("input"));
+
+        let args_str = match args_val_opt {
+            Some(serde_json::Value::String(s)) => s.clone(),
+            Some(other) => serde_json::to_string(other).unwrap_or_default(),
+            None => {
+                let mut obj = val.clone();
+                if let Some(map) = obj.as_object_mut() {
+                    map.remove("name");
+                    map.remove("tool");
+                    map.remove("action");
+                    serde_json::to_string(&serde_json::Value::Object(map.clone()))
+                        .unwrap_or_default()
+                } else {
+                    "{}".to_string()
+                }
+            }
+        };
+
+        return Some(ToolCall {
+            id: val
+                .get("id")
+                .and_then(|id| id.as_str())
+                .unwrap_or("")
+                .to_string(),
+            r#type: "function".to_string(),
+            function: ToolCallFunction {
+                name: name.to_string(),
+                arguments: args_str,
+            },
+        });
+    }
+
+    None
+}
+
+fn collect_tool_calls_from_text(text: &str, calls: &mut Vec<crate::llm::client::ToolCall>) {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+    // Stream deserializer parses single JSON values, JSON arrays, or multiple sequential JSON values
+    let stream = serde_json::Deserializer::from_str(trimmed).into_iter::<serde_json::Value>();
+    for val in stream.flatten() {
+        if let Some(arr) = val.as_array() {
+            for item in arr {
+                if let Some(tc) = value_to_tool_call(item) {
+                    calls.push(tc);
+                }
+            }
+        } else if let Some(tc) = value_to_tool_call(&val) {
+            calls.push(tc);
+        }
+    }
+}
+
+/// Fallback extraction for tool calls when the model returns them inside content
+/// (e.g. in markdown blocks or raw JSON).
+fn extract_tool_calls_from_content(response: &str) -> Vec<crate::llm::client::ToolCall> {
+    let mut calls = Vec::new();
+    let trimmed = response.trim();
+    if trimmed.is_empty() {
+        return calls;
+    }
+
+    // 1. Direct JSON parse (array, object, or multiple objects)
+    collect_tool_calls_from_text(trimmed, &mut calls);
+    if !calls.is_empty() {
+        return calls;
+    }
+
+    // 2. Extract from markdown code blocks ```json ... ``` or ``` ... ```
+    let mut search_pos = 0;
+    while let Some(start_fence) = response[search_pos..].find("```") {
+        let abs_start = search_pos + start_fence;
+        let content_start = match response[abs_start..].find('\n') {
+            Some(nl) => abs_start + nl + 1,
+            None => break,
+        };
+        if let Some(end_fence) = response[content_start..].find("```") {
+            let block = response[content_start..content_start + end_fence].trim();
+            collect_tool_calls_from_text(block, &mut calls);
+            search_pos = content_start + end_fence + 3;
+        } else {
+            // Unclosed code block (e.g. truncated generation)
+            let block = response[content_start..].trim();
+            collect_tool_calls_from_text(block, &mut calls);
+            break;
+        }
+    }
+    if !calls.is_empty() {
+        return calls;
+    }
+
+    // 3. Extract from <tool_call>...</tool_call> or <toolcall>...</toolcall>
+    for tag in &["tool_call", "toolcall", "function_call"] {
+        let open_tag = format!("<{tag}>");
+        let close_tag = format!("</{tag}>");
+        let mut pos = 0;
+        while let Some(start) = response[pos..].find(&open_tag) {
+            let content_start = pos + start + open_tag.len();
+            if let Some(end) = response[content_start..].find(&close_tag) {
+                let block = response[content_start..content_start + end].trim();
+                collect_tool_calls_from_text(block, &mut calls);
+                pos = content_start + end + close_tag.len();
+            } else {
+                let block = response[content_start..].trim();
+                collect_tool_calls_from_text(block, &mut calls);
+                break;
+            }
+        }
+    }
+
+    calls
+}
+
 /// Run a typed tool-use iteration. A mutation invalidates prior verification;
 /// the loop cannot complete until a fresh gate passes or is explicitly unavailable.
 ///
@@ -503,10 +660,10 @@ async fn run_tool_use_iteration(
         let response = completion.content;
         let mut tool_calls = completion.tool_calls;
 
-        // Temporary compatibility path for providers that still serialize tool
-        // calls into assistant content. Typed tool_calls always take precedence.
+        // Fallback extraction for models/providers that serialize tool calls into
+        // assistant content (e.g. JSON in markdown code blocks or tags).
         if tool_calls.is_empty() {
-            tool_calls = serde_json::from_str(&response).unwrap_or_default();
+            tool_calls = extract_tool_calls_from_content(&response);
         }
         for (index, call) in tool_calls.iter_mut().enumerate() {
             if call.id.is_empty() {
@@ -871,13 +1028,15 @@ fn tool_arguments(tc: &crate::llm::client::ToolCall) -> Result<serde_json::Value
     if let Ok(v) = serde_json::from_str(cleaned) {
         return Ok(v);
     }
+    // Deserializer parses the first valid JSON value and ignores trailing whitespace/prose.
+    let mut de = serde_json::Deserializer::from_str(cleaned);
+    if let Ok(v) = serde::Deserialize::deserialize(&mut de) {
+        return Ok(v);
+    }
     if let Some(start) = cleaned.find('{') {
-        if let Some(end) = cleaned.rfind('}') {
-            if end > start {
-                if let Ok(v) = serde_json::from_str(&cleaned[start..=end]) {
-                    return Ok(v);
-                }
-            }
+        let mut de = serde_json::Deserializer::from_str(&cleaned[start..]);
+        if let Ok(v) = serde::Deserialize::deserialize(&mut de) {
+            return Ok(v);
         }
     }
     serde_json::from_str(cleaned)
@@ -992,6 +1151,7 @@ fn execute_tool(
                     .and_then(|value| value.as_u64())
                     .and_then(|value| usize::try_from(value).ok())
             };
+            let previous_content = state.files.read_file(path);
             let result = if tc.function.name == "write_file" {
                 string_arg("content")
                     .ok_or_else(|| anyhow::anyhow!("missing required argument: content"))
@@ -1001,7 +1161,13 @@ fn execute_tool(
                 let end = usize_arg("end_line");
                 let old = string_arg("old_content");
                 match string_arg("new_content") {
-                    Some(new_content) => state.files.edit_file(path, start, end, old, new_content),
+                    Some(new_content) => {
+                        if start.is_none() && end.is_none() && old.is_none() {
+                            state.files.write_file(path, new_content)
+                        } else {
+                            state.files.edit_file(path, start, end, old, new_content)
+                        }
+                    }
                     None => Err(anyhow::anyhow!("missing required argument: new_content")),
                 }
             } else if tc.function.name == "multi_edit_file" {
@@ -1050,6 +1216,20 @@ fn execute_tool(
             };
             match result {
                 Ok(()) => {
+                    if let Some(updated) = state.files.read_file(path) {
+                        if let Some(spec) = &state.task_spec {
+                            if let Err(rejection) = spec.check_patch(&updated, path) {
+                                if let Some(old_c) = &previous_content {
+                                    let _ = state.files.write_file(path, old_c);
+                                } else if let Some(target) = state.files.resolve(path) {
+                                    let _ = std::fs::remove_file(target);
+                                }
+                                return ToolExecutionResult::output(format!(
+                                    "Specification-Locked gate rejected mutation to {path}:\n{rejection}\n\nPreserve the exact required signature."
+                                ));
+                            }
+                        }
+                    }
                     state.session.add_file(path);
                     state.mark_changed(path);
                     ToolExecutionResult {
@@ -2371,21 +2551,48 @@ async fn run_planner_fallback(
         );
         let tools = coding_tools(state);
         let model = state.config.coder_model.clone();
-        let prior = state.session.conversation();
+        // Minimal transcript for repair: do not pass long multi-turn session history
+        // which pushes small models into prose/conversational mode.
+        let prior: Vec<(String, String)> = Vec::new();
+
+        let diag_summary = if diags.is_empty() {
+            state.last_test_output.trim().to_string()
+        } else {
+            diags
+                .iter()
+                .map(|d| {
+                    if let (Some(f), Some(l)) = (&d.file, d.line) {
+                        format!("{}:{}: {}", f, l, d.message)
+                    } else {
+                        d.message.clone()
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let target_files = state.changed_files.iter().cloned().collect::<Vec<_>>().join(", ");
+        let recovery_task = format!(
+            "Your previous response did not invoke a tool.\n\n\
+             You are in REPAIR mode.\n\
+             You must perform the correction using one of the provided tools (edit_file, write_file).\n\
+             Do not explain.\n\
+             Do not return markdown prose.\n\
+             Do not describe the fix.\n\n\
+             Current diagnostic:\n{diag_summary}\n\n\
+             Allowed target:\n{}\n\n\
+             Required action:\n\
+             emit exactly one tool call to apply the fix.",
+            if target_files.is_empty() { "workspace source files" } else { &target_files }
+        );
 
         // Small models sometimes answer a repair prompt in prose instead of
-        // emitting tool calls; give each round one strict re-ask first.
+        // emitting tool calls; give each round one strict dry protocol recovery re-ask first.
         let mut outcome: Option<Result<ToolLoopOutcome, anyhow::Error>> = None;
         for attempt in 0..2 {
             let iter_task = if attempt == 0 {
                 fix_task.clone()
             } else {
-                format!(
-                    "{fix_task}\n\nSTRICT REQUIREMENT: do NOT reply in prose. You MUST \
-                     respond with tool calls that apply the fix (edit_file / write_file / \
-                     replace_exact) and then verify with run_tests. A text-only response \
-                     is discarded."
-                )
+                recovery_task.clone()
             };
             match run_tool_use_iteration(
                 client,
@@ -2395,12 +2602,12 @@ async fn run_planner_fallback(
                 &tools,
                 hooks,
                 &prior,
-                attempt == 0,
+                true,
             )
             .await
             {
                 Ok(ToolLoopOutcome::NoTools) if attempt == 0 => {
-                    hooks.warn("  [repair] model replied without tool calls; re-asking...");
+                    hooks.warn("  [repair] model replied without tool calls; sending protocol recovery...");
                     continue;
                 }
                 other => {
@@ -2865,5 +3072,43 @@ mod tests {
             env: vec![("ANAMNESIC_FAKE_MCP_SERVER".into(), "1".into())],
         };
         crate::mcp::McpClient::connect(&config).expect("fake MCP server should start")
+    }
+
+    #[test]
+    fn extracts_tool_calls_from_markdown_code_block() {
+        let response = r#"Here is the fix:
+```json
+{
+  "name": "edit_file",
+  "arguments": {
+    "path": "src/lib.rs",
+    "new_content": "pub fn hello() {}"
+  }
+}
+```
+Hope this helps!"#;
+        let calls = extract_tool_calls_from_content(response);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].function.name, "edit_file");
+        assert!(calls[0].function.arguments.contains("src/lib.rs"));
+    }
+
+    #[test]
+    fn extracts_tool_calls_from_tag_format() {
+        let response = r#"<tool_call>
+{"name": "write_file", "arguments": {"path": "src/main.rs", "content": "fn main() {}"}}
+</tool_call>"#;
+        let calls = extract_tool_calls_from_content(response);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].function.name, "write_file");
+        assert!(calls[0].function.arguments.contains("src/main.rs"));
+    }
+
+    #[test]
+    fn extracts_tool_calls_from_raw_json_object() {
+        let response = r#"{"name": "run_tests", "arguments": {"command": "cargo test"}}"#;
+        let calls = extract_tool_calls_from_content(response);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].function.name, "run_tests");
     }
 }

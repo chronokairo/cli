@@ -335,7 +335,7 @@ impl FileTools {
         &self.workspace
     }
 
-    fn resolve(&self, path: &str) -> Option<PathBuf> {
+    pub fn resolve(&self, path: &str) -> Option<PathBuf> {
         let raw = PathBuf::from(path);
         let joined = if raw.is_absolute() {
             raw
@@ -367,6 +367,16 @@ impl FileTools {
         } else {
             None
         }
+    }
+
+    pub fn remove_file(&self, path: &str) -> anyhow::Result<()> {
+        let target = self
+            .resolve(path)
+            .ok_or_else(|| anyhow::anyhow!("path is outside workspace"))?;
+        if target.exists() {
+            std::fs::remove_file(target)?;
+        }
+        Ok(())
     }
 
     /// True when the lexical (pre-canonicalization) path falls under one of the

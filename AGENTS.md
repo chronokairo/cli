@@ -95,8 +95,9 @@ Each index.md file contains a list of files in that directory with brief descrip
 - [`docs/adr/0015-competitive-backlog.md`](docs/adr/0015-competitive-backlog.md) — Competitive Backlog (C1–C9, R1–R3)
 - [`docs/adr/0016-vision-gap-analysis.md`](docs/adr/0016-vision-gap-analysis.md) — Vision Gap Analysis (2026-08-08)
 - [`docs/adr/0017-specification-locked-execution.md`](docs/adr/0017-specification-locked-execution.md) — Specification-Locked Execution (v0.9.5)
+- [`docs/adr/0018-versioned-h-battery-and-tool-resilience.md`](docs/adr/0018-versioned-h-battery-and-tool-resilience.md) — Versioned H-Battery & Resilient Tool Protocol (v0.9.5)
 - [`docs/gap-analysis-2026-08.md`](docs/gap-analysis-2026-08.md) — 2026 Competitor Gap Analysis Report
 - [`docs/gap-analysis-vision-2026-08.md`](docs/gap-analysis-vision-2026-08.md) — Vision vs. Codebase Gap Analysis (synthesis)
 - [`docs/explore-report-01-llm-routing-inference.md`](docs/explore-report-01-llm-routing-inference.md) — Explore report: LLM routing & local inference layer
 - [`docs/explore-report-02-context-memory-caching.md`](docs/explore-report-02-context-memory-caching.md) — Explore report: context, memory & caching layer
-- [`docs/explore-report-03-agent-tools-validation-security.md`](docs/explore-report-03-agent-tools-validation-security.md) — Explore report: agent loop, tools, validation & security
+- [`docs/explore-report-03-agent-tools-validation-security.md`](docs/explore-report-03-agent-tools-validation-security.md) — Explore report: agent loop, tools, validation & security
