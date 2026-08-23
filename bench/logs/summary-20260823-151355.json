@@ -1,0 +1,23 @@
+[
+  {
+    "Task": "h1-orders",
+    "Model": "qwen2.5-coder:3b",
+    "Status": "FAIL",
+    "ExitCode": 0,
+    "Log": "C:\\Users\\luann\\Documents\\GitHub\\anamnesic-coder\\bench\\logs\\h1-orders-20260823-151355.log"
+  },
+  {
+    "Task": "h2-users",
+    "Model": "qwen2.5-coder:3b",
+    "Status": "DRIFT-BLOCKED",
+    "ExitCode": 0,
+    "Log": "C:\\Users\\luann\\Documents\\GitHub\\anamnesic-coder\\bench\\logs\\h2-users-20260823-151355.log"
+  },
+  {
+    "Task": "h3-pool",
+    "Model": "qwen2.5-coder:3b",
+    "Status": "FAIL",
+    "ExitCode": 0,
+    "Log": "C:\\Users\\luann\\Documents\\GitHub\\anamnesic-coder\\bench\\logs\\h3-pool-20260823-151355.log"
+  }
+]

@@ -396,6 +396,7 @@ async fn run_tool_use_iteration(
     tools: &[crate::llm::client::ToolDef],
     hooks: &AgentHooks,
     prior: &[(String, String)],
+    force_required_first: bool,
 ) -> Result<ToolLoopOutcome> {
     let project_ctx = CoderPrompt::load_project_context(&state.config.workspace_dir);
     let system_prompt = CoderPrompt::with_context(&project_ctx);
@@ -427,9 +428,13 @@ async fn run_tool_use_iteration(
             }
             return Ok(ToolLoopOutcome::Interrupted);
         }
-        let tool_choice = if state.dirty && state.verification.is_none() {
+        let tool_choice = if (iteration == 0 && force_required_first)
+            || (state.dirty && state.verification.is_none())
+        {
             // A mutation is pending verification: require a tool call so the
-            // model cannot answer before running the gate.
+            // model cannot answer before running the gate. Repair rounds also
+            // force the first call — small models answer cold repair prompts
+            // in prose unless tool emission is mandatory.
             crate::llm::client::ToolChoice::Required
         } else {
             crate::llm::client::ToolChoice::Auto
@@ -559,6 +564,11 @@ async fn run_tool_use_iteration(
         }
 
         if !used_tools {
+            // Keep the raw reply visible: a silent NoTools is undiagnosable.
+            let preview: String = response.chars().take(300).collect();
+            if !preview.trim().is_empty() {
+                hooks.warn(&format!("  [no-tools] raw reply: {preview}"));
+            }
             return Ok(ToolLoopOutcome::NoTools);
         }
 
@@ -963,8 +973,9 @@ fn execute_tool(
                 return ToolExecutionResult::output("missing required argument: path");
             };
             // v0.9.5 oracle lock: the model can never touch its own exam.
+            // Spec-guard refusals are reported to the model but are NOT
+            // blocked actions — verification stays the sole judge.
             if let Some(message) = state.locked_path_error(path) {
-                state.record_blocked_action(format!("{} {path}: {message}", tc.function.name));
                 return ToolExecutionResult::output(message);
             }
             if let Err(message) = hooks.require_approval(
@@ -2142,6 +2153,54 @@ fn route_turn(client: &LlmRouter, state: &AgentState, task: &str, hooks: &AgentH
     decision.selected_model
 }
 
+/// Inline the current content of files implicated by the failing gate so the
+/// repair model can emit a single edit without exploratory reads — small
+/// models routinely answer cold repair prompts in prose instead of tools.
+fn inline_failing_sources(state: &AgentState) -> String {
+    const MAX_FILE_CHARS: usize = 3500;
+    const MAX_TOTAL_CHARS: usize = 7000;
+    let mut paths: Vec<String> = Vec::new();
+    for line in state.last_test_output.lines() {
+        let trimmed = line.trim_start();
+        let Some(rest) = trimmed.strip_prefix("-->") else {
+            continue;
+        };
+        let file = rest.split(':').next().unwrap_or("").trim();
+        if file.is_empty() {
+            continue;
+        }
+        let normalized = file.replace('\\', "/");
+        if normalized.starts_with("tests/")
+            || normalized.starts_with("target/")
+            || paths.iter().any(|p| p == &normalized)
+        {
+            continue;
+        }
+        paths.push(normalized);
+    }
+    if paths.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("\n\nCURRENT CONTENT OF THE FILES TO FIX (read-only snapshot; edit these, not the tests):\n");
+    let mut total = 0usize;
+    for path in paths.iter().take(3) {
+        let Some(content) = state.files.read_file(path) else {
+            continue;
+        };
+        if total >= MAX_TOTAL_CHARS {
+            break;
+        }
+        let snippet: String = content.chars().take(MAX_FILE_CHARS).collect();
+        total += snippet.len();
+        out.push_str(&format!("\n--- {path} ---\n{snippet}\n"));
+    }
+    if total == 0 {
+        return String::new();
+    }
+    out.push_str("\nApply your fix to the code above with edit_file or replace_exact, then verify with run_tests.\n");
+    out
+}
+
 /// Agent mode: tool-use iteration first, planner fallback on failure.
 async fn run_agent_mode(
     client: &LlmRouter,
@@ -2152,7 +2211,7 @@ async fn run_agent_mode(
     let tools = coding_tools(state);
     let model = route_turn(client, state, task, hooks);
     let prior = state.session.conversation();
-    match run_tool_use_iteration(client, state, &model, task, &tools, hooks, &prior).await {
+    match run_tool_use_iteration(client, state, &model, task, &tools, hooks, &prior, false).await {
         Ok(ToolLoopOutcome::Completed(final_text)) => {
             state.session.add_message("assistant", &final_text);
             state.session.add_action("tool-use turn completed");
@@ -2288,53 +2347,113 @@ async fn run_planner_fallback(
         hooks.verification(&gate);
     }
 
-    if state.verification_failed() {
-        if state.retries < state.config.max_retries {
-            state.retries += 1;
-            let diags = test::extract_diagnostics(&state.last_test_output);
-            let feedback = test::format_scoped_repair_prompt(&diags, None, &state.last_test_output);
-            let oracle_directive = state
-                .task_spec
-                .as_ref()
-                .map(|spec| spec.oracle_repair_directive())
-                .unwrap_or_default();
-            let fix_task = format!(
-                "Fix the failed verification for the task: {task}\n\n{feedback}{oracle_directive}"
-            );
-            let tools = coding_tools(state);
-            let model = state.config.coder_model.clone();
-            let prior = state.session.conversation();
-            match run_tool_use_iteration(client, state, &model, &fix_task, &tools, hooks, &prior)
-                .await
+    // Repair ROUNDS: after each repair iteration the verification gate is
+    // re-run, and its fresh diagnostics seed the next round — mirroring the
+    // v0.9.2 guided-repair loop that historically converged in <=2 rounds.
+    let mut interrupted = false;
+    while state.verification_failed() {
+        if state.retries >= state.config.max_retries {
+            break;
+        }
+        state.retries += 1;
+        let diags = test::extract_diagnostics(&state.last_test_output);
+        let feedback = test::format_scoped_repair_prompt(&diags, None, &state.last_test_output);
+        let oracle_directive = state
+            .task_spec
+            .as_ref()
+            .map(|spec| spec.oracle_repair_directive())
+            .unwrap_or_default();
+        let sources = inline_failing_sources(state);
+        let fix_task = format!(
+            "Repair round {}/{}: fix the failed verification for the task: {task}\n\n\
+             {feedback}{oracle_directive}{sources}Use your tools (read_file, edit_file, run_tests).",
+            state.retries, state.config.max_retries
+        );
+        let tools = coding_tools(state);
+        let model = state.config.coder_model.clone();
+        let prior = state.session.conversation();
+
+        // Small models sometimes answer a repair prompt in prose instead of
+        // emitting tool calls; give each round one strict re-ask first.
+        let mut outcome: Option<Result<ToolLoopOutcome, anyhow::Error>> = None;
+        for attempt in 0..2 {
+            let iter_task = if attempt == 0 {
+                fix_task.clone()
+            } else {
+                format!(
+                    "{fix_task}\n\nSTRICT REQUIREMENT: do NOT reply in prose. You MUST \
+                     respond with tool calls that apply the fix (edit_file / write_file / \
+                     replace_exact) and then verify with run_tests. A text-only response \
+                     is discarded."
+                )
+            };
+            match run_tool_use_iteration(
+                client,
+                state,
+                &model,
+                &iter_task,
+                &tools,
+                hooks,
+                &prior,
+                attempt == 0,
+            )
+            .await
             {
-                Ok(ToolLoopOutcome::Completed(message)) => {
-                    state.session.add_message("assistant", &message);
-                    hooks.done(&message);
+                Ok(ToolLoopOutcome::NoTools) if attempt == 0 => {
+                    hooks.warn("  [repair] model replied without tool calls; re-asking...");
+                    continue;
                 }
-                Ok(ToolLoopOutcome::Failed(message)) => {
-                    let mut message = message;
-                    message.push_str(&finalize_transaction(state, hooks, false));
-                    hooks.failed(&message);
-                }
-                Ok(ToolLoopOutcome::Interrupted) => {
-                    finalize_transaction(state, hooks, false);
-                    hooks.emit(AgentEvent::Interrupted);
-                }
-                Ok(ToolLoopOutcome::NoTools) => {
-                    let mut message =
-                        "Repair model returned no tool calls while verification was failing"
-                            .to_string();
-                    message.push_str(&finalize_transaction(state, hooks, false));
-                    hooks.failed(&message);
-                }
-                Err(error) => {
-                    let mut message = format!("Repair loop unavailable: {error}");
-                    message.push_str(&finalize_transaction(state, hooks, false));
-                    hooks.failed(&message);
+                other => {
+                    outcome = Some(other);
+                    break;
                 }
             }
-            return;
         }
+
+        match outcome {
+            Some(Ok(ToolLoopOutcome::Completed(message))) => {
+                state.session.add_message("assistant", &message);
+            }
+            Some(Ok(ToolLoopOutcome::Failed(mut message))) => {
+                message.push_str(&finalize_transaction(state, hooks, false));
+                hooks.failed(&message);
+                return;
+            }
+            Some(Ok(ToolLoopOutcome::Interrupted)) => {
+                interrupted = true;
+                break;
+            }
+            Some(Ok(ToolLoopOutcome::NoTools)) | None => {
+                hooks.warn(
+                    "  [repair] model would not emit tool calls; stopping repair rounds",
+                );
+                break;
+            }
+            Some(Err(error)) => {
+                let mut message = format!("Repair loop unavailable: {error}");
+                message.push_str(&finalize_transaction(state, hooks, false));
+                hooks.failed(&message);
+                return;
+            }
+        }
+
+        // Re-run the gate on the REAL workspace state before deciding whether
+        // another repair round is worth it.
+        if let Err(error) = state.refresh_workspace_diff() {
+            hooks.warn(&format!("  [transaction] diff unavailable: {error}"));
+        }
+        let gate = automatic_verification(state);
+        state.record_verification(gate.clone());
+        hooks.verification(&gate);
+    }
+
+    if interrupted {
+        finalize_transaction(state, hooks, false);
+        hooks.emit(AgentEvent::Interrupted);
+        return;
+    }
+
+    if state.verification_failed() {
         let mut message = format!(
             "Verification still failing after {} repair attempt(s):\n{}",
             state.retries,

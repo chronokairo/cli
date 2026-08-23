@@ -31,11 +31,19 @@ pub struct TaskContract {
 
 impl TaskContract {
     /// Extracts explicit method signatures and type constraints from task descriptions.
+    ///
+    /// A single unified scanner walks the ENTIRE text looking for
+    /// signature-shaped paren groups. This intentionally supports multiple
+    /// signatures per line/sentence (`... User::new(a: A, b: B) ... e
+    /// register(&mut self, ...) ...`) and is robust to prose around them:
+    /// parameter parsing requires `name: Type` shape and the return type is a
+    /// balanced token (so `-> u64 deve repassar o valor` yields just `u64`).
     pub fn extract(task: &str) -> Self {
         let mut methods = Vec::new();
         let mut type_constraints = Vec::new();
         let mut behavior_notes = Vec::new();
 
+        // Behavioral requirements (unchanged segmentation pass).
         for line in task.lines() {
             let trimmed = line.trim();
             for seg in trimmed.split([';', '.', '!', '?']) {
@@ -44,95 +52,24 @@ impl TaskContract {
                     behavior_notes.push(seg.to_string());
                 }
             }
-            // Look for patterns like `metodo transfer(&mut self, from_id: u64, to_id: u64, amount: f64) -> Result<(), String>`
-            // or `fn transfer(...)`
-            if let Some(fn_start) = trimmed.find("(&mut self")
-                .or_else(|| trimmed.find("(&self"))
-                .or_else(|| trimmed.find("(self"))
-                .or_else(|| trimmed.find("(mut self"))
-            {
-                // Find method name before '('
-                let before = &trimmed[..fn_start];
-                let name_token = before
-                    .split_whitespace()
-                    .last()
-                    .unwrap_or("")
-                    .trim_start_matches("metodo ")
-                    .trim_start_matches("fn ")
-                    .trim_matches('`')
-                    .trim();
-                // `User::register(&mut self, ...)` carries an explicit owner.
-                let (owner, fn_name) = match name_token.rsplit_once("::") {
-                    Some((o, n)) => (Some(o.to_string()), n),
-                    None => (None, name_token),
-                };
+        }
 
-                if !fn_name.is_empty() {
-                    let after = &trimmed[fn_start..];
-                    let sig_end = after.find(')').map(|i| i + 1).unwrap_or(after.len());
-                    let mut full_sig = format!("{fn_name}{}", &after[..sig_end]);
-                    let receiver_part = &after[1..sig_end - 1];
-                    let self_kind = receiver_part
-                        .split(',')
-                        .next()
-                        .map(str::trim)
-                        .and_then(crate::repo::spec::SelfKind::parse)
-                        .map(|sk| sk.as_str().to_string());
-
-                    // Extract return type if present
-                    let ret_part = &after[sig_end..];
-                    let return_type = if let Some(arrow_idx) = ret_part.find("->") {
-                        let ret_after = &ret_part[arrow_idx + 2..];
-                        let clean_ret = ret_after
-                            .split_whitespace()
-                            .take_while(|s| !s.contains("que") && !s.contains("validando") && !s.contains("chamando") && !s.ends_with('.'))
-                            .collect::<Vec<_>>()
-                            .join(" ");
-                        let clean_ret = clean_ret.trim_end_matches('.').trim().to_string();
-                        if !clean_ret.is_empty() {
-                            full_sig.push_str(&format!(" -> {clean_ret}"));
-                            Some(clean_ret)
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    };
-
-                    // Extract parameter types
-                    let mut params = Vec::new();
-                    let param_str = &after[1..sig_end - 1]; // inside parentheses
-                    for part in param_str.split(',') {
-                        let p = part.trim();
-                        if p.starts_with('&') || p == "self" || p == "mut self" {
-                            continue;
-                        }
-                        if let Some((pname, ptype)) = p.split_once(':') {
-                            params.push(ParamSpec {
-                                name: pname.trim().to_string(),
-                                type_name: ptype.trim().to_string(),
-                            });
-                        }
+        // Unified signature scanner over the whole text.
+        let chars: Vec<char> = task.chars().collect();
+        let mut seen: std::collections::HashSet<(Option<String>, String)> =
+            std::collections::HashSet::new();
+        let mut i = 0;
+        while i < chars.len() {
+            if chars[i] == '(' {
+                if let Some((end, sig)) = try_parse_signature_at(&chars, i) {
+                    if seen.insert((sig.owner.clone(), sig.fn_name.clone())) {
+                        methods.push(sig);
                     }
-
-                    // Identify target file from line context
-                    let file = detect_target_file(line);
-
-                    methods.push(RequiredMethod {
-                        file,
-                        owner,
-                        fn_name: fn_name.to_string(),
-                        raw_signature: full_sig,
-                        self_kind,
-                        params,
-                        return_type,
-                    });
+                    i = end;
+                    continue;
                 }
-            } else if let Some(req) = extract_associated_fn(trimmed) {
-                // Associated-function style requirements such as
-                // `User::new(name: String, age: u32) -> User`.
-                methods.push(req);
             }
+            i += 1;
         }
 
         // Add explicit type constraints based on extracted parameters
@@ -229,96 +166,232 @@ fn detect_target_file(line: &str) -> Option<String> {
     fallback
 }
 
-/// Extracts associated-function requirements such as
-/// `User::new(name: String, age: u32) -> User` from a task line.
-fn extract_associated_fn(trimmed: &str) -> Option<RequiredMethod> {
-    let dc = trimmed.find("::")?;
-    let owner_ok = trimmed[..dc]
-        .chars()
-        .last()
-        .map(|c| c.is_alphanumeric() || c == '_')
-        .unwrap_or(false);
-    if !owner_ok {
+/// Attempts to parse a signature whose `(` sits at `open_idx`.
+///
+/// Returns `(index_after_return_type, parsed_method)` on success. The shape
+/// contract is strict enough to reject prose parenthesised asides: parameters
+/// must be `name: Type` (or a receiver), and the return type must be a single
+/// balanced type token directly after `->`.
+fn try_parse_signature_at(
+    chars: &[char],
+    open_idx: usize,
+) -> Option<(usize, RequiredMethod)> {
+    // ---- 1. Qualified name immediately before the '(' ----------------------
+    let mut j = open_idx;
+    while j > 0 && chars[j - 1].is_whitespace() {
+        j -= 1;
+    }
+    if j == 0 || !(chars[j - 1].is_alphanumeric() || chars[j - 1] == '_') {
         return None;
     }
-    // Owner = the identifier run immediately before `::`.
-    let owner_start = trimmed[..dc]
-        .char_indices()
-        .rev()
-        .take_while(|(_, c)| c.is_alphanumeric() || *c == '_')
-        .last()
-        .map(|(i, _)| i)
-        .unwrap_or(dc);
-    let owner = Some(trimmed[owner_start..dc].to_string());
-    let after_dc = &trimmed[dc + 2..];
-    let name_end = after_dc.find('(')?;
-    let fn_name = after_dc[..name_end].trim().trim_matches('`');
-    if fn_name.is_empty() || !fn_name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+    let name_end = j;
+    while j > 0 {
+        let c = chars[j - 1];
+        if c.is_alphanumeric() || c == '_' {
+            j -= 1;
+        } else if c == ':' && j >= 2 && chars[j - 2] == ':' {
+            j -= 2;
+        } else {
+            break;
+        }
+    }
+    let full_name: String = chars[j..name_end].iter().collect();
+    let (owner, fn_name) = match full_name.rsplit_once("::") {
+        Some((o, n)) => (Some(o.to_string()), n.to_string()),
+        None => (None, full_name.clone()),
+    };
+    const KEYWORDS: [&str; 9] = [
+        "if", "for", "while", "match", "loop", "in", "fn", "metodo", "r",
+    ];
+    if fn_name.is_empty()
+        || KEYWORDS.contains(&fn_name.as_str())
+        || fn_name.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(true)
+    {
         return None;
     }
-    let after = &after_dc[name_end..];
-    let close_idx = after.find(')')?;
-    if close_idx == 0 {
-        return Some(RequiredMethod {
-            file: detect_target_file(trimmed),
-            owner,
-            fn_name: fn_name.to_string(),
-            raw_signature: format!("{fn_name}()"),
-            self_kind: None,
-            params: Vec::new(),
-            return_type: None,
-        });
+
+    // ---- 2. Balanced parameter list ---------------------------------------
+    let mut depth = 0i32;
+    let mut k = open_idx;
+    while k < chars.len() {
+        match chars[k] {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    break;
+                }
+            }
+            _ => {}
+        }
+        k += 1;
     }
-    let param_str = &after[1..close_idx];
-    if param_str.contains("self") {
-        return None; // handled by the method branch
+    if k >= chars.len() || depth != 0 {
+        return None; // unbalanced — prose or code fragment
     }
+    let inside: String = chars[open_idx + 1..k].iter().collect();
+    let after_close = k + 1;
+
+    // ---- 3. Receiver + typed parameters ------------------------------------
+    let mut self_kind: Option<String> = None;
     let mut params = Vec::new();
-    for part in param_str.split(',') {
+    let mut shaped = true;
+    for part in split_top_level_commas(&inside) {
         let p = part.trim();
         if p.is_empty() {
             continue;
         }
-        if let Some((pname, ptype)) = p.split_once(':') {
-            params.push(ParamSpec {
-                name: pname.trim().trim_start_matches("mut ").trim().to_string(),
-                type_name: ptype.trim().to_string(),
-            });
-        } else {
-            return None; // untyped prose, not a signature
+        if let Some(sk) = crate::repo::spec::SelfKind::parse(p) {
+            self_kind = Some(sk.as_str().to_string());
+            continue;
         }
-    }
-    let mut raw_signature = format!("{fn_name}({param_str})");
-    let ret_part = &after[close_idx + 1..];
-    let return_type = match ret_part.find("->") {
-        Some(idx) => {
-            let tail = ret_part[idx + 2..].trim();
-            let tail = tail.trim_end_matches(['.', ';', ',']);
-            let clean_ret: String = tail
-                .split_whitespace()
-                .take_while(|s| !s.contains("que") && !s.contains("validando") && !s.ends_with('.'))
-                .collect::<Vec<_>>()
-                .join(" ");
-            let clean_ret = clean_ret.trim_end_matches('.').trim().to_string();
-            if clean_ret.is_empty() {
-                None
-            } else {
-                raw_signature.push_str(&format!(" -> {clean_ret}"));
-                Some(clean_ret)
+        match p.split_once(':') {
+            Some((n, t)) => {
+                let n = n.trim();
+                let t = t.trim();
+                if is_ident(n) && !t.is_empty() {
+                    params.push(ParamSpec {
+                        name: n.trim_start_matches("mut ").trim().to_string(),
+                        type_name: t.to_string(),
+                    });
+                } else {
+                    shaped = false;
+                    break;
+                }
+            }
+            None => {
+                shaped = false;
+                break;
             }
         }
-        None => None,
-    };
+    }
+    if !shaped || (self_kind.is_none() && params.is_empty()) {
+        return None; // prose like "(LIFO)" or "()"
+    }
 
-    Some(RequiredMethod {
-        file: detect_target_file(trimmed),
-        owner,
-        fn_name: fn_name.to_string(),
-        raw_signature,
-        self_kind: None,
-        params,
-        return_type,
-    })
+    // ---- 4. Return type: ONE balanced token after '->' ---------------------
+    let mut m = after_close;
+    while m < chars.len() && chars[m].is_whitespace() {
+        m += 1;
+    }
+    let mut return_type = None;
+    let mut end = after_close;
+    if m + 1 < chars.len() && chars[m] == '-' && chars[m + 1] == '>' {
+        let mut n = m + 2;
+        while n < chars.len() && chars[n].is_whitespace() {
+            n += 1;
+        }
+        let (tok, tok_end) = read_type_token(chars, n);
+        if !tok.is_empty() {
+            return_type = Some(tok);
+            end = tok_end;
+        }
+    }
+
+    // ---- 5. Render raw signature + target-file context ---------------------
+    let mut arg_list: Vec<String> = Vec::new();
+    if let Some(sk) = &self_kind {
+        arg_list.push(sk.clone());
+    }
+    for p in &params {
+        arg_list.push(format!("{}: {}", p.name, p.type_name));
+    }
+    let mut raw_signature = format!("{fn_name}({})", arg_list.join(", "));
+    if let Some(r) = &return_type {
+        raw_signature.push_str(&format!(" -> {r}"));
+    }
+    // Target file: nearest `.rs` token in the ~80 chars before the signature.
+    let ctx_start = j.saturating_sub(80);
+    let ctx: String = chars[ctx_start..j].iter().collect();
+
+    Some((
+        end,
+        RequiredMethod {
+            file: detect_target_file(&ctx),
+            owner,
+            fn_name,
+            raw_signature,
+            self_kind,
+            params,
+            return_type,
+        },
+    ))
+}
+
+/// Reads one balanced Rust type token starting at `start` (`u64`,
+/// `Result<Buffer, String>`, `&'a [u8; 4]`, `Vec<HashMap<K, V>>`, ...).
+/// Returns the token and the index of the first char NOT part of it.
+fn read_type_token(chars: &[char], start: usize) -> (String, usize) {
+    let mut out = String::new();
+    let mut angle = 0i32;
+    let mut s = start;
+    while s < chars.len() {
+        let c = chars[s];
+        match c {
+            '<' => {
+                angle += 1;
+                out.push(c);
+            }
+            '>' => {
+                if angle == 0 {
+                    break;
+                }
+                angle -= 1;
+                out.push(c);
+            }
+            ',' | ';' | '.' | ')' | ']' if angle == 0 => break,
+            c if c.is_whitespace() && angle == 0 => break,
+            other => out.push(other),
+        }
+        s += 1;
+    }
+    (out.trim().to_string(), s)
+}
+
+/// Splits on commas that are not nested inside `<...>` or `(...)`.
+fn split_top_level_commas(s: &str) -> Vec<String> {
+    let mut parts = Vec::new();
+    let mut cur = String::new();
+    let mut angle = 0i32;
+    let mut paren = 0i32;
+    for c in s.chars() {
+        match c {
+            '<' => {
+                angle += 1;
+                cur.push(c);
+            }
+            '>' => {
+                if angle > 0 {
+                    angle -= 1;
+                }
+                cur.push(c);
+            }
+            '(' => {
+                paren += 1;
+                cur.push(c);
+            }
+            ')' => {
+                if paren > 0 {
+                    paren -= 1;
+                }
+                cur.push(c);
+            }
+            ',' if angle == 0 && paren == 0 => {
+                parts.push(std::mem::take(&mut cur));
+            }
+            _ => cur.push(c),
+        }
+    }
+    if !cur.trim().is_empty() {
+        parts.push(cur);
+    }
+    parts
+}
+
+fn is_ident(s: &str) -> bool {
+    !s.is_empty()
+        && s.chars().next().map(|c| c.is_alphabetic() || c == '_').unwrap_or(false)
+        && s.chars().all(|c| c.is_alphanumeric() || c == '_')
 }
 
 #[cfg(test)]
@@ -356,6 +429,27 @@ mod tests {
         assert_eq!(m.params.len(), 2);
         assert_eq!(m.params[1].type_name, "u32");
         assert_eq!(m.return_type.as_deref(), Some("User"));
+    }
+
+    #[test]
+    fn probe_h2_task_text_extraction() {
+        let task = "Em user.rs adicione o campo age: u32 ao struct User e atualize o construtor para User::new(name: String, age: u32), nesta ordem. Em service.rs propague: register(&mut self, name: String, age: u32) -> u64 deve repassar o valor ao User criado via User::new.";
+        let contract = TaskContract::extract(task);
+        for m in &contract.methods {
+            eprintln!(
+                "METHOD owner={:?} name={} raw={} params={:?} ret={:?} file={:?}",
+                m.owner, m.fn_name, m.raw_signature,
+                m.params.iter().map(|p| (p.name.clone(), p.type_name.clone())).collect::<Vec<_>>(),
+                m.return_type, m.file
+            );
+        }
+        assert_eq!(contract.methods.len(), 2);
+        let new_m = contract.methods.iter().find(|m| m.fn_name == "new").expect("User::new must be extracted");
+        assert_eq!(new_m.params.len(), 2);
+        assert_eq!(new_m.return_type.as_deref(), None);
+        let reg = contract.methods.iter().find(|m| m.fn_name == "register").expect("register must be extracted");
+        assert_eq!(reg.params.len(), 2);
+        assert_eq!(reg.return_type.as_deref(), Some("u64"), "return tail must stop at first token after '->'");
     }
 
     #[test]

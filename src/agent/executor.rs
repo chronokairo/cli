@@ -186,9 +186,10 @@ async fn write_with_verification<F>(
         return;
     }
     // v0.9.5 oracle lock: planner-driven writes can never touch the exam.
+    // A spec-guard refusal is NOT a blocked action: the harness correctly
+    // refused an out-of-spec step, and verification stays the sole judge.
     if let Some(message) = state.locked_path_error(filename) {
-        hooks.warn(&format!("  ✗ {message}"));
-        state.record_blocked_action(format!("planner_write {filename}: {message}"));
+        hooks.warn(&format!("  ? {message}"));
         return;
     }
     let mut extra = String::new();

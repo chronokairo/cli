@@ -1,0 +1,7 @@
+{
+  "Task": "h3-pool",
+  "Model": "qwen2.5-coder:3b",
+  "Status": "FAIL",
+  "ExitCode": 2,
+  "Log": "C:\\Users\\luann\\Documents\\GitHub\\anamnesic-coder\\bench\\logs\\h3-pool-20260823-143342.log"
+}

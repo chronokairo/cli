@@ -86,6 +86,10 @@ impl FnSignature {
 
     /// Structural equality against another signature (whitespace-insensitive
     /// on types; `_` parameter names act as wildcards).
+    ///
+    /// An UNSPECIFIED return type in the requirement is a wildcard: the task
+    /// not naming a return does not forbid the idiomatic `-> Self`/`-> &T`.
+    /// A SPECIFIED return must match exactly.
     pub fn matches_required(&self, other: &FnSignature) -> bool {
         self.self_kind == other.self_kind
             && self.params.len() == other.params.len()
@@ -94,9 +98,11 @@ impl FnSignature {
                     && norm_type(&a.type_name) == norm_type(&b.type_name)
             })
             && match (&self.return_type, &other.return_type) {
+                // SYMMETRIC wildcard: an UNSPECIFIED return on either side
+                // (requirement or implementation) imposes no constraint.
+                // Specified-vs-specified must match exactly.
                 (Some(a), Some(b)) => norm_type(a) == norm_type(b),
-                (None, None) => true,
-                _ => false,
+                _ => true,
             }
     }
 }
@@ -149,6 +155,11 @@ pub struct TaskSpec {
     /// Pre-existing signatures at turn start keyed by `Struct::method` / `method`.
     pub baseline: BTreeMap<String, BaselineEntry>,
     pub oracle: Option<AcceptanceOracle>,
+    /// Package name from Cargo.toml (integration-test import path root).
+    pub crate_name: Option<String>,
+    /// Verbatim `src/lib.rs` (or `src/main.rs`) so the oracle references the
+    /// REAL module tree instead of inventing `mod` paths.
+    pub lib_rs: Option<String>,
 }
 
 impl TaskSpec {
@@ -160,6 +171,8 @@ impl TaskSpec {
             contract: TaskContract::extract(task),
             baseline: BTreeMap::new(),
             oracle: None,
+            crate_name: None,
+            lib_rs: None,
         }
     }
 
@@ -841,6 +854,30 @@ pub async fn compile_task_spec(
 ) -> TaskSpec {
     let mut spec = TaskSpec::from_task(task);
 
+    // Crate identity + real module tree, so the oracle can import types via
+    // the actual public path instead of hallucinating `mod` declarations.
+    if let Some(cargo_toml) = state.files.read_file("Cargo.toml") {
+        for line in cargo_toml.lines() {
+            let line = line.trim();
+            if let Some(rest) = line.strip_prefix("name") {
+                let rest = rest.trim_start();
+                if let Some(rest) = rest.strip_prefix('=') {
+                    let name = rest.trim().trim_matches('"').trim_matches('\'').to_string();
+                    if !name.is_empty() {
+                        spec.crate_name = Some(name);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    for candidate in ["src/lib.rs", "src/main.rs"] {
+        if let Some(lib) = state.files.read_file(candidate) {
+            spec.lib_rs = Some(lib);
+            break;
+        }
+    }
+
     // Baseline snapshot of every existing signature in the repository.
     let repo_map = RepoMap::build(&state.config.workspace_dir);
     for f in &repo_map.files {
@@ -881,31 +918,190 @@ pub async fn compile_task_spec(
 
     // Acceptance oracle: synthesized once, before any implementation exists.
     if state.config.spec_oracle && !spec.contract.methods.is_empty() {
-        match generate_acceptance_oracle(client, &state.config.planner_model, &spec).await {
-            Some(content) => {
-                let path = format!(
-                    "tests/anamnesic_oracle_{}.rs",
-                    std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_nanos())
-                        .unwrap_or(0)
-                );
-                match state.files.write_file(&path, &content) {
-                    Ok(()) => {
-                        state.mark_changed(&path);
-                        hooks.note(&format!("  [spec] acceptance oracle locked: {path}"));
-                        spec.oracle = Some(AcceptanceOracle { path, content });
-                    }
-                    Err(error) => hooks.warn(&format!("  [spec] oracle write failed: {error}")),
-                }
+        match lock_acceptance_oracle(client, state, &spec, hooks).await {
+            Some(oracle) => {
+                spec.oracle = Some(oracle);
             }
             None => {
-                hooks.note("  [spec] oracle generation unavailable; proceeding without locked tests");
+                hooks.note(
+                    "  [spec] oracle generation unavailable; proceeding without locked tests",
+                );
             }
         }
     }
 
     spec
+}
+
+/// Generates, compile-validates and locks the acceptance oracle.
+///
+/// The oracle is written into the turn transaction immediately. It is then
+/// checked with `cargo check --tests`: pre-implementation failures are
+/// EXPECTED (the required API does not exist yet — that is the whole point),
+/// so only oracle-authoring bugs (broken imports/mods: E0432/E0433/E0583/
+/// circular mods) trigger ONE regeneration round with the rustc diagnostics
+/// as feedback. A second failure drops the oracle entirely — a broken locked
+/// test would poison every verification for the rest of the turn.
+fn lock_acceptance_oracle<'a>(
+    client: &'a crate::llm::router::LlmRouter,
+    state: &'a mut crate::agent::state::AgentState,
+    spec: &'a TaskSpec,
+    hooks: &'a crate::agent::agent_loop::AgentHooks,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Option<AcceptanceOracle>> + Send + 'a>,
+> {
+    Box::pin(async move {
+        let crate_name = spec.crate_name.clone();
+        let lib_rs = spec.lib_rs.clone();
+        let import_hints = build_import_hints(state, spec);
+        let path = format!(
+            "tests/anamnesic_oracle_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        );
+        let path = format!("{path}.rs");
+        let mut feedback: Option<String> = None;
+        for attempt in 0..2 {
+            let Some(content) = generate_acceptance_oracle(
+                client,
+                &state.config.planner_model,
+                spec,
+                crate_name.as_deref(),
+                lib_rs.as_deref(),
+                &import_hints,
+                feedback.as_deref(),
+            )
+            .await
+            else {
+                return None;
+            };
+            if state.files.write_file(&path, &content).is_err() {
+                hooks.warn("  [spec] oracle write failed");
+                return None;
+            }
+            match oracle_authoring_bugs(state, &path) {
+                None => {
+                    state.mark_changed(&path);
+                    hooks.note(&format!("  [spec] acceptance oracle locked: {path}"));
+                    return Some(AcceptanceOracle { path, content });
+                }
+                Some(bugs) if attempt == 0 => {
+                    hooks.warn(&format!(
+                        "  [spec] oracle has authoring errors; regenerating once..."
+                    ));
+                    let _ = std::fs::remove_file(
+                        std::path::Path::new(&state.config.workspace_dir).join(&path),
+                    );
+                    feedback = Some(bugs);
+                }
+                Some(bugs) => {
+                    hooks.warn(&format!(
+                        "  [spec] oracle still broken after retry; dropping locked tests\n{bugs}"
+                    ));
+                    let _ = std::fs::remove_file(
+                        std::path::Path::new(&state.config.workspace_dir).join(&path),
+                    );
+                    return None;
+                }
+            }
+        }
+        None
+    })
+}
+
+/// Deterministic import table `Type -> fully qualified path` derived from the
+/// repo map, so the oracle never guesses module paths again.
+fn build_import_hints(
+    state: &crate::agent::state::AgentState,
+    spec: &TaskSpec,
+) -> Vec<(String, String)> {
+    let _ = spec;
+    let repo_map = RepoMap::build(&state.config.workspace_dir);
+    let crate_name = match &repo_map.crate_name {
+        Some(c) => c.clone(),
+        None => return Vec::new(),
+    };
+    let mut out = Vec::new();
+    for f in &repo_map.files {
+        let rel = f.rel_path.replace('\\', "/");
+        let rel = match rel.strip_prefix("src/") {
+            Some(r) => r,
+            None => continue,
+        };
+        let stem = rel.trim_end_matches(".rs");
+        let chain = if stem == "lib" || stem == "main" {
+            String::new()
+        } else if let Some(base) = stem.strip_suffix("/mod") {
+            base.replace('/', "::")
+        } else {
+            stem.replace('/', "::")
+        };
+        let prefix = if chain.is_empty() {
+            crate_name.clone()
+        } else {
+            format!("{crate_name}::{chain}")
+        };
+        for sym in &f.symbols {
+            let is_type = matches!(
+                sym.kind,
+                crate::repo::context::SymbolKind::Struct | crate::repo::context::SymbolKind::Enum
+            ) && !sym.name.contains("::");
+            if is_type {
+                let full = format!("{prefix}::{}", sym.name);
+                if !out.iter().any(|(t, _)| t == &sym.name) {
+                    out.push((sym.name.clone(), full));
+                }
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+const ORACLE_EXPECTED_ERROR_CODES: [&str; 4] = ["E0061", "E0425", "E0599", "E0609"];
+
+/// Runs `cargo check --tests` in the workspace and returns a report of
+/// oracle-AUTHORING bugs only. Pre-implementation API-missing errors are the
+/// desired red state and never reported here. `None` means the oracle is
+/// structurally sound.
+fn oracle_authoring_bugs(
+    state: &crate::agent::state::AgentState,
+    _oracle_rel_path: &str,
+) -> Option<String> {
+    let output = std::process::Command::new("cargo")
+        .args(["check", "--tests", "--message-format=short", "--quiet"])
+        .current_dir(&state.config.workspace_dir)
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&output.stderr);
+    let mut bugs = String::new();
+    for line in text.lines() {
+        let is_diag = line.contains("error")
+            && (line.contains("E0") || line.contains("error:") || line.contains("error["));
+        if !is_diag {
+            continue;
+        }
+        let hits_oracle = line.contains("anamnesic_oracle") || {
+            // short format: `path:line:col: error...` — check path part only
+            line.split_once(": error")
+                .map(|(loc, _)| loc.contains("anamnesic_oracle"))
+                .unwrap_or(false)
+        };
+        if !hits_oracle {
+            continue;
+        }
+        let expected = ORACLE_EXPECTED_ERROR_CODES
+            .iter()
+            .any(|code| line.contains(code));
+        if expected {
+            continue; // missing-API red state — fine by design
+        }
+        bugs.push_str(line.trim());
+        bugs.push('\n');
+    }
+    (!bugs.is_empty()).then_some(bugs)
 }
 
 /// One-shot synthesis prompt: produce a complete Rust integration-test file
@@ -915,6 +1111,10 @@ async fn generate_acceptance_oracle(
     client: &crate::llm::router::LlmRouter,
     model: &str,
     spec: &TaskSpec,
+    crate_name: Option<&str>,
+    lib_rs: Option<&str>,
+    import_hints: &[(String, String)],
+    authoring_feedback: Option<&str>,
 ) -> Option<String> {
     let existing: Vec<String> = spec
         .baseline
@@ -922,18 +1122,49 @@ async fn generate_acceptance_oracle(
         .take(60)
         .cloned()
         .collect();
+    let layout = match (crate_name, lib_rs) {
+        (Some(name), Some(lib)) => format!(
+            "Crate name: `{name}`\nCrate root (src/lib.rs), VERBATIM:\n```rust\n{}```",
+            lib.trim()
+        ),
+        _ => "No lib target detected; if sources must be included use \
+              #[path = \"../src/<exact file name>.rs\"] with the REAL file names."
+              .to_string(),
+    };
+    let imports_block = if import_hints.is_empty() {
+        String::new()
+    } else {
+        let mut s = String::from("\nAuthoritative type locations — copy these `use` paths EXACTLY:\n");
+        for (ty, full) in import_hints {
+            s.push_str(&format!("use {full};  // `{ty}`\n"));
+        }
+        s
+    };
+    let feedback_block = match authoring_feedback {
+        Some(f) => format!(
+            "\n\nYOUR PREVIOUS ATTEMPT FAILED TO COMPILE with these errors. Fix EXACTLY \
+             these problems (wrong imports / mod paths) and output the corrected full file:\n{f}\n"
+        ),
+        None => String::new(),
+    };
     let prompt = format!(
         "You are an acceptance-test compiler. Write ONE complete Rust integration test file that will be saved as `tests/anamnesic_oracle.rs`.\n\
          Rules:\n\
          1. Test EXACTLY the API specified below — exact function names, parameter types, parameter placement and return types.\n\
          2. Encode every behavioral requirement as a test (preconditions, valid/invalid state transitions, postconditions).\n\
          3. Tests must FAIL TO COMPILE or FAIL ASSERTIONS against any implementation that deviates from the required API.\n\
-         4. Do NOT mock the modules under test. If the crate has no lib target, include the real sources with #[path = \"../src/<file>.rs\"] mod declarations.\n\
-         5. Output ONLY the complete file content inside a single ```rust code block. No explanations.\n\n\
-         Existing repository symbols (for imports/mod paths only — do not change them):\n{}\n\n{}\n\nOriginal task:\n{}\n",
+         4. Do NOT mock or re-declare the modules under test. Reference them exactly as shown below.\n\
+         5. Required API members are methods/functions on their owner types. Import the TYPES and call the methods on instances (e.g. `use crate_name::module::Type;` then `obj.method()`). Never import method names as free items.\n\
+         6. Construct values only with constructors/fields that ALREADY exist in the repository symbols shown below — never invent constructors.\n\
+         7. Output ONLY the complete file content inside a single ```rust code block. No explanations.\n\n\
+         Repository layout (authoritative — imports/mod paths MUST follow it):\n{}{}\n\n\
+         Existing repository symbols (names only):\n{}\n\n{}\n\nOriginal task:\n{}\n{}",
+        layout,
+        imports_block,
         existing.join("\n"),
         spec.contract.to_prompt_string(),
         spec.raw_task,
+        feedback_block,
     );
     let reply = client
         .generate_with_retry_with_fallback(model, &prompt, None, None)

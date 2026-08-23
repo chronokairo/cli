@@ -151,11 +151,41 @@ impl AgentState {
 
     /// Refusal message for attempts to mutate locked paths.
     pub fn locked_path_error(&self, path: &str) -> Option<String> {
-        self.path_is_locked(path).then(|| format!(
-            "ORACLE LOCKED: `{path}` contains this turn's acceptance tests.\n\
-             These tests define the required behavior and MUST NOT be edited, deleted or weakened.\n\
-             Fix the implementation instead."
-        ))
+        if self.path_is_locked(path) {
+            return Some(format!(
+                "ORACLE LOCKED: `{path}` contains this turn's acceptance tests.\n\
+                 These tests define the required behavior and MUST NOT be edited, deleted or weakened.\n\
+                 Fix the implementation instead."
+            ));
+        }
+        // When the task carries an explicit API contract, the specification
+        // owns the whole `tests/` territory for this turn: no parallel junk
+        // test files, no self-grading — whether or not an LLM-synthesized
+        // oracle was successfully locked on top.
+        let spec_owns_tests = self
+            .task_spec
+            .as_ref()
+            .map(|spec| {
+                spec.oracle.is_some() || !spec.contract.methods.is_empty()
+            })
+            .unwrap_or(false);
+        let norm = path.replace('\\', "/");
+        let norm = norm.trim_start_matches("./");
+        if spec_owns_tests && (norm == "tests" || norm.starts_with("tests/")) {
+            let oracle_path = self
+                .task_spec
+                .as_ref()
+                .and_then(|spec| spec.oracle.as_ref())
+                .map(|o| o.path.as_str())
+                .unwrap_or("the fixed acceptance tests shipped with the task");
+            return Some(format!(
+                "SPECIFICATION OWNS TESTS: this turn has an explicit API contract \
+                 ({oracle_path} define the required behavior).\nCreating or modifying files \
+                 under `tests/` is disabled while the specification is locked.\nDo NOT write \
+                 your own tests — make the IMPLEMENTATION satisfy them."
+            ));
+        }
+        None
     }
 
     pub fn refresh_workspace_diff(&mut self) -> anyhow::Result<WorkspaceDiff> {
