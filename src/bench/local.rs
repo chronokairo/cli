@@ -4,7 +4,7 @@ use crate::llm::infer::{
     engine::InferenceEngine, gguf::GgufReader, model::Model, tokenizer::Tokenizer,
 };
 use crate::llm::model_resolver;
-use crate::models_dev::ModelsDevClient;
+use crate::providers::ModelsDevClient;
 use std::path::Path;
 use std::time::Instant;
 

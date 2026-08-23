@@ -118,6 +118,13 @@ pub struct Config {
     pub adversarial_verification: bool,
     /// Auto-index assistant messages into the vector store on persist.
     pub memory_indexing: bool,
+    /// v0.9.5 Specification-Locked Execution: compile an immutable TaskSpec
+    /// (raw task + contract + repo API baseline) once per turn and enforce it
+    /// on every write before compilation.
+    pub spec_lock: bool,
+    /// Generate the locked acceptance-oracle test file at turn start, before
+    /// any implementation exists. Requires `spec_lock`.
+    pub spec_oracle: bool,
     pub write_tool_policy: ApprovalPolicy,
     pub command_tool_policy: ApprovalPolicy,
     pub mcp_servers: Vec<crate::mcp::McpServerConfig>,
@@ -230,6 +237,8 @@ impl Default for Config {
             lint_on_mutation: env_bool("LINT_ON_MUTATION", true),
             adversarial_verification: env_bool("ADVERSARIAL_VERIFICATION", false),
             memory_indexing: env_bool("MEMORY_INDEXING", false),
+            spec_lock: env_bool("SPEC_LOCK", true),
+            spec_oracle: env_bool("SPEC_ORACLE", true),
             write_tool_policy: ApprovalPolicy::from_env("WRITE_TOOL_POLICY", ApprovalPolicy::Allow),
             command_tool_policy: ApprovalPolicy::from_env(
                 "COMMAND_TOOL_POLICY",

@@ -1,4 +1,4 @@
-use crate::models_dev::Catalog;
+use crate::providers::Catalog;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -349,7 +349,7 @@ fn mask_key(key: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models_dev::types::{Catalog, ModelInfo, Provider};
+    use crate::providers::types::{Catalog, ModelInfo, Provider};
 
     fn sample_catalog() -> Catalog {
         let mut m = HashMap::new();

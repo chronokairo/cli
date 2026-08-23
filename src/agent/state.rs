@@ -56,6 +56,12 @@ pub struct AgentState {
     pub turn_cost_usd: f64,
     /// Session task checklist maintained via the `todo` tool.
     pub todos: Vec<TodoItem>,
+    /// Immutable per-turn specification (v0.9.5): compiled once from the raw
+    /// user task at turn start; never re-derived from session context.
+    pub task_spec: Option<std::sync::Arc<crate::repo::spec::TaskSpec>>,
+    /// Workspace paths locked for this turn (acceptance oracle). Writes to
+    /// these paths are refused before touching the filesystem.
+    pub locked_paths: BTreeSet<String>,
     /// Local embedding engine for `memory_search` (lazily loads the GGUF model).
     pub embedder: crate::llm::embedder::Embedder,
     /// Discovered skill packs (project `./skills` + user `~/.anamnesic/skills`).
@@ -97,6 +103,8 @@ impl AgentState {
             last_persisted_summary: None,
             turn_cost_usd: 0.0,
             todos: Vec::new(),
+            task_spec: None,
+            locked_paths: BTreeSet::new(),
             embedder,
             skills,
             background: crate::tools::background::BackgroundTaskManager::new(),
@@ -113,11 +121,41 @@ impl AgentState {
         self.last_diff = WorkspaceDiff::default();
         self.dirty = false;
         self.turn_cost_usd = 0.0;
+        // A new turn compiles a fresh specification from the incoming task.
+        self.task_spec = None;
+        self.locked_paths.clear();
         self.transaction = Some(WorkspaceTransaction::begin(
             self.config.workspace_dir.clone(),
             self.config.transaction_max_bytes,
         )?);
         Ok(())
+    }
+
+    /// True when `path` points at a file locked for this turn (oracle).
+    pub fn path_is_locked(&self, path: &str) -> bool {
+        let norm = path.replace('\\', "/");
+        let norm = norm.trim_start_matches("./");
+        if self
+            .task_spec
+            .as_ref()
+            .map(|spec| spec.locks_path(&norm))
+            .unwrap_or(false)
+        {
+            return true;
+        }
+        self.locked_paths.iter().any(|locked| {
+            let l = locked.trim_start_matches("./");
+            norm == l || norm.ends_with(&format!("/{l}"))
+        })
+    }
+
+    /// Refusal message for attempts to mutate locked paths.
+    pub fn locked_path_error(&self, path: &str) -> Option<String> {
+        self.path_is_locked(path).then(|| format!(
+            "ORACLE LOCKED: `{path}` contains this turn's acceptance tests.\n\
+             These tests define the required behavior and MUST NOT be edited, deleted or weakened.\n\
+             Fix the implementation instead."
+        ))
     }
 
     pub fn refresh_workspace_diff(&mut self) -> anyhow::Result<WorkspaceDiff> {
@@ -189,6 +227,8 @@ impl AgentState {
         self.last_persisted_summary = None;
         self.turn_cost_usd = 0.0;
         self.todos.clear();
+        self.task_spec = None;
+        self.locked_paths.clear();
     }
 
     pub fn record_blocked_action(&mut self, action: impl Into<String>) {

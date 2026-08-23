@@ -32,19 +32,28 @@ pub fn resolve_model(name_or_path: &str, models_dir: &Path) -> Result<PathBuf> {
 pub fn list_models(models_dir: &Path) -> Vec<String> {
     let mut models = Vec::new();
     for root in candidate_roots(models_dir) {
-        let manifests_root = root
-            .join("manifests")
-            .join("registry.ollama.ai")
-            .join("library");
-        if let Ok(entries) = std::fs::read_dir(&manifests_root) {
-            for entry in entries.flatten() {
-                let model_name = entry.file_name().to_string_lossy().to_string();
-                let model_path = entry.path();
-                if let Ok(tags) = std::fs::read_dir(&model_path) {
-                    for tag_entry in tags.flatten() {
-                        let tag = tag_entry.file_name().to_string_lossy().to_string();
-                        models.push(format!("{}:{}", model_name, tag));
-                    }
+        models.extend(list_models_in_root(&root));
+    }
+    models.sort();
+    models.dedup();
+    models
+}
+
+/// List all model names from a single candidate root directory.
+pub fn list_models_in_root(root: &Path) -> Vec<String> {
+    let mut models = Vec::new();
+    let manifests_root = root
+        .join("manifests")
+        .join("registry.ollama.ai")
+        .join("library");
+    if let Ok(entries) = std::fs::read_dir(&manifests_root) {
+        for entry in entries.flatten() {
+            let model_name = entry.file_name().to_string_lossy().to_string();
+            let model_path = entry.path();
+            if let Ok(tags) = std::fs::read_dir(&model_path) {
+                for tag_entry in tags.flatten() {
+                    let tag = tag_entry.file_name().to_string_lossy().to_string();
+                    models.push(format!("{}:{}", model_name, tag));
                 }
             }
         }
@@ -62,7 +71,7 @@ fn candidate_roots(models_dir: &Path) -> Vec<PathBuf> {
         roots.push(system);
     }
 
-    if let Some(home) = std::env::var_os("HOME") {
+    if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
         let user = PathBuf::from(home).join(".ollama").join("models");
         if user != models_dir && user.exists() {
             roots.push(user);
@@ -167,7 +176,7 @@ mod tests {
         write_manifest(&root, "qwen3", "1.7b", "b1");
         write_manifest(&root, "qwen3", "latest", "b2");
         write_manifest(&root, "gemma3", "4b", "b3");
-        let models = list_models(&root);
+        let models = list_models_in_root(&root);
         assert!(
             models.contains(&"qwen3:1.7b".to_string()),
             "got: {models:?}"
@@ -186,7 +195,7 @@ mod tests {
     #[test]
     fn lists_nothing_without_manifests() {
         let root = temp_dir("empty");
-        let models = list_models(&root);
+        let models = list_models_in_root(&root);
         assert!(models.is_empty(), "got: {models:?}");
         let _ = fs::remove_dir_all(&root);
     }

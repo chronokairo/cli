@@ -8,7 +8,7 @@
 //! O fallback usa essa classificação para trocar para um modelo de mesmo nível
 //! quando o modelo primário falha, preservando o perfil de capacidade esperado.
 
-use crate::models_dev::types::{ModelInfo, Provider};
+use crate::providers::types::{ModelInfo, Provider};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ModelTier {
@@ -36,7 +36,7 @@ impl ModelTier {
 /// em conhecimento de catálogo NIM 2026. Modelos desconhecidos recebem
 /// uma classificação conservadora como Smart.
 pub fn classify_model_tier(model_id: &str) -> ModelTier {
-    let base = crate::models_dev::base_id(model_id);
+    let base = crate::providers::base_id(model_id);
     let lower = base.to_lowercase();
 
     // --- Intelligent: frontends de ponta (2026 NIM catalog) ---
@@ -130,9 +130,9 @@ pub fn classify_model_tier_from_info(model_id: &str, info: Option<&ModelInfo>) -
 pub fn find_same_tier_fallback(
     model_id: &str,
     provider: &str,
-    catalog: &crate::models_dev::ModelsDevClient,
+    catalog: &crate::providers::ModelsDevClient,
 ) -> Option<String> {
-    let primary_base = crate::models_dev::base_id(model_id);
+    let primary_base = crate::providers::base_id(model_id);
     let tier = classify_model_tier(&primary_base);
 
     let prov = catalog.catalog.get(provider)?;
@@ -143,7 +143,7 @@ pub fn find_same_tier_fallback(
         .models
         .iter()
         .filter_map(|(id, m)| {
-            let model_base = crate::models_dev::base_id(id);
+            let model_base = crate::providers::base_id(id);
             // Must be same tier
             let m_tier = classify_model_tier_from_info(id, Some(m));
             if m_tier != tier {
@@ -169,9 +169,9 @@ pub fn find_same_tier_fallback(
 
 /// Check if a model supports tool calls within a provider's model map.
 fn check_tool_call_support(model_id: &str, prov: &Provider) -> bool {
-    let base = crate::models_dev::base_id(model_id);
+    let base = crate::providers::base_id(model_id);
     for (id, info) in &prov.models {
-        if id == model_id || crate::models_dev::base_id(id) == base {
+        if id == model_id || crate::providers::base_id(id) == base {
             return info.tool_call;
         }
     }
@@ -242,8 +242,8 @@ mod tests {
         assert!(ModelTier::Smart < ModelTier::Intelligent);
     }
 
-    fn test_catalog_with_multiple_tiers() -> crate::models_dev::ModelsDevClient {
-        use crate::models_dev::types::{Cost, Limits, Modalities, ModelInfo, Provider};
+    fn test_catalog_with_multiple_tiers() -> crate::providers::ModelsDevClient {
+        use crate::providers::types::{Cost, Limits, Modalities, ModelInfo, Provider};
         use std::collections::HashMap;
 
         let make = |id: &str, tier_id: &str, cost_in: f64| ModelInfo {
@@ -300,7 +300,7 @@ mod tests {
         let mut catalog = HashMap::new();
         catalog.insert("nvidia".into(), nvidia);
 
-        crate::models_dev::ModelsDevClient { catalog }
+        crate::providers::ModelsDevClient { catalog }
     }
 
     #[test]

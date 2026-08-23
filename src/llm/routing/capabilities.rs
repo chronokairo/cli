@@ -7,7 +7,7 @@
 
 use crate::llm::routing::complexity::Complexity;
 use crate::llm::routing::RoutingContext;
-use crate::models_dev::types::ModelInfo;
+use crate::providers::types::ModelInfo;
 use serde::{Deserialize, Serialize};
 
 /// Capabilities a model declares. `max_context` is the effective context
@@ -118,7 +118,7 @@ mod tests {
 
     #[test]
     fn catalog_maps_tool_and_context() {
-        let info = crate::models_dev::types::ModelInfo {
+        let info = crate::providers::types::ModelInfo {
             id: "m".into(),
             name: "m".into(),
             family: "f".into(),
@@ -127,17 +127,17 @@ mod tests {
             temperature: false,
             open_weights: true,
             attachment: true,
-            limit: crate::models_dev::types::Limits {
+            limit: crate::providers::types::Limits {
                 context: 131_072,
                 output: 4096,
             },
-            cost: crate::models_dev::types::Cost {
+            cost: crate::providers::types::Cost {
                 input: 0.5,
                 output: 1.0,
                 cache_read: None,
                 cache_write: None,
             },
-            modalities: crate::models_dev::types::Modalities::default(),
+            modalities: crate::providers::types::Modalities::default(),
             knowledge: None,
             release_date: None,
         };

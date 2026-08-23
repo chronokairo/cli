@@ -201,11 +201,17 @@ pub fn is_allowed(cmd: &str, config: &Config) -> bool {
     // Check blocked commands for forbidden operations (e.g. rm -rf /, format, sudo reboot)
     for blocked in &config.blocked_commands {
         let b = blocked.to_lowercase();
-        if exe_lower == b
-            || cmd_lower.contains(&b)
-            || exe_lower.starts_with(&format!("{b}/"))
-            || exe_lower.starts_with(&format!("{b}\\"))
-        {
+        if !b.contains(' ') {
+            if exe_lower == b
+                || exe_lower == format!("{b}.exe")
+                || exe_lower.ends_with(&format!("/{b}"))
+                || exe_lower.ends_with(&format!("\\{b}"))
+                || exe_lower.ends_with(&format!("/{b}.exe"))
+                || exe_lower.ends_with(&format!("\\{b}.exe"))
+            {
+                return false;
+            }
+        } else if cmd_lower.contains(&b) {
             return false;
         }
     }

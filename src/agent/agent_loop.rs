@@ -578,15 +578,22 @@ async fn run_tool_use_iteration(
             VerificationAction::Repair => {
                 state.repair_attempt += 1;
                 let gate = state.verification.clone().expect("failed gate exists");
-                let feedback = truncate_tool_output(&gate.output, FIX_FEEDBACK_CAP);
+                let diags = test::extract_diagnostics(&gate.output);
+                let feedback = test::format_scoped_repair_prompt(&diags, None, &gate.output);
+                let oracle_directive = state
+                    .task_spec
+                    .as_ref()
+                    .map(|spec| spec.oracle_repair_directive())
+                    .unwrap_or_default();
                 conversation.push(serde_json::json!({
                     "role": "user",
                     "content": format!(
-                        "Verification failed (repair {}/{}). Fix the implementation without weakening tests, then run verification again.\nCommand: {}\nOutput:\n{}",
+                        "Verification failed (repair {}/{}). Fix the implementation without weakening tests, then run verification again.\nCommand: {}\n\n{}{}",
                         state.repair_attempt,
                         state.config.max_retries,
                         gate.command.as_deref().unwrap_or("unknown"),
-                        feedback
+                        feedback,
+                        oracle_directive
                     )
                 }));
                 continue;
@@ -840,7 +847,30 @@ fn execute_tool_calls(
 }
 
 fn tool_arguments(tc: &crate::llm::client::ToolCall) -> Result<serde_json::Value, String> {
-    serde_json::from_str(&tc.function.arguments)
+    let args_str = tc.function.arguments.trim();
+    if args_str.is_empty() || args_str == "{}" {
+        return Ok(serde_json::json!({}));
+    }
+    let cleaned = if let Some(stripped) = args_str.strip_prefix("```json") {
+        stripped.trim_end_matches("```").trim()
+    } else if let Some(stripped) = args_str.strip_prefix("```") {
+        stripped.trim_end_matches("```").trim()
+    } else {
+        args_str
+    };
+    if let Ok(v) = serde_json::from_str(cleaned) {
+        return Ok(v);
+    }
+    if let Some(start) = cleaned.find('{') {
+        if let Some(end) = cleaned.rfind('}') {
+            if end > start {
+                if let Ok(v) = serde_json::from_str(&cleaned[start..=end]) {
+                    return Ok(v);
+                }
+            }
+        }
+    }
+    serde_json::from_str(cleaned)
         .map_err(|error| format!("invalid JSON arguments: {error}"))
 }
 
@@ -932,6 +962,11 @@ fn execute_tool(
             let Some(path) = string_arg("path") else {
                 return ToolExecutionResult::output("missing required argument: path");
             };
+            // v0.9.5 oracle lock: the model can never touch its own exam.
+            if let Some(message) = state.locked_path_error(path) {
+                state.record_blocked_action(format!("{} {path}: {message}", tc.function.name));
+                return ToolExecutionResult::output(message);
+            }
             if let Err(message) = hooks.require_approval(
                 state.config.write_tool_policy,
                 &tc.function.name,
@@ -2057,6 +2092,18 @@ pub async fn run_agent_loop_with_hooks(
     state.session.add_message("user", task);
 
     connect_mcp_clients(state, hooks);
+
+    // v0.9.5 Specification-Locked Execution: compile the immutable task
+    // specification ONCE from the raw user task. Planner, coder, repair and
+    // verification all read this frozen copy for the rest of the turn.
+    if state.config.spec_lock {
+        let spec = std::sync::Arc::new(
+            crate::repo::spec::compile_task_spec(client, state, task, hooks).await,
+        );
+        state.task_spec = Some(spec);
+        hooks.note("  [spec] specification locked for this turn");
+    }
+
     maybe_compact(client, state, hooks).await;
 
     if hooks.interrupted() {
@@ -2155,6 +2202,15 @@ async fn run_planner_fallback(
     require_plan_approval: bool,
 ) {
     let context = state.session.get_context();
+    let repo_map = crate::repo::RepoMap::build(&state.config.workspace_dir);
+    // The contract comes from the frozen per-turn spec, never from the
+    // mutable session context.
+    let contract_map = state
+        .task_spec
+        .as_ref()
+        .map(|spec| spec.to_prompt_string())
+        .unwrap_or_default();
+    let enriched_context = format!("{}\n\n{}\n\n{}", repo_map.to_prompt_string(), contract_map, context);
     let fallback_plan = || crate::types::plan::Plan {
         steps: vec![crate::types::plan::PlanStep {
             step_type: "answer".into(),
@@ -2164,7 +2220,7 @@ async fn run_planner_fallback(
             command: None,
         }],
     };
-    let plan = planner::plan_task(client, &state.config.planner_model, task, &context)
+    let plan = planner::plan_task(client, &state.config.planner_model, task, &enriched_context)
         .await
         .unwrap_or_else(|e| {
             state.session.add_message(
@@ -2235,9 +2291,15 @@ async fn run_planner_fallback(
     if state.verification_failed() {
         if state.retries < state.config.max_retries {
             state.retries += 1;
-            let feedback = truncate_tool_output(&state.last_test_output, FIX_FEEDBACK_CAP);
+            let diags = test::extract_diagnostics(&state.last_test_output);
+            let feedback = test::format_scoped_repair_prompt(&diags, None, &state.last_test_output);
+            let oracle_directive = state
+                .task_spec
+                .as_ref()
+                .map(|spec| spec.oracle_repair_directive())
+                .unwrap_or_default();
             let fix_task = format!(
-                "Fix the failed verification for the original task: {task}\n\nVerification output:\n{feedback}"
+                "Fix the failed verification for the task: {task}\n\n{feedback}{oracle_directive}"
             );
             let tools = coding_tools(state);
             let model = state.config.coder_model.clone();
@@ -2397,7 +2459,7 @@ mod tests {
         let mut models = std::collections::HashMap::new();
         models.insert(
             "z-ai/glm-5.2".into(),
-            crate::models_dev::types::ModelInfo {
+            crate::providers::types::ModelInfo {
                 id: "z-ai/glm-5.2".into(),
                 name: "z-ai/glm-5.2".into(),
                 family: "glm-5.2".into(),
@@ -2406,25 +2468,25 @@ mod tests {
                 temperature: false,
                 open_weights: true,
                 attachment: false,
-                limit: crate::models_dev::types::Limits {
+                limit: crate::providers::types::Limits {
                     context: 131_072,
                     output: 4096,
                 },
-                cost: crate::models_dev::types::Cost {
+                cost: crate::providers::types::Cost {
                     input: 0.5,
                     output: 1.0,
                     cache_read: None,
                     cache_write: None,
                 },
-                modalities: crate::models_dev::types::Modalities::default(),
+                modalities: crate::providers::types::Modalities::default(),
                 knowledge: None,
                 release_date: None,
             },
         );
-        let mut catalog = crate::models_dev::types::Catalog::new();
+        let mut catalog = crate::providers::types::Catalog::new();
         catalog.insert(
             "nvidia".into(),
-            crate::models_dev::types::Provider {
+            crate::providers::types::Provider {
                 id: "nvidia".into(),
                 name: "nvidia".into(),
                 api: String::new(),
@@ -2435,7 +2497,7 @@ mod tests {
         );
         let router = LlmRouter::with_cloud_for_test(
             crate::llm::client::LlmClient::ollama("http://localhost:11434"),
-            crate::models_dev::ModelsDevClient { catalog },
+            crate::providers::ModelsDevClient { catalog },
         );
         let (hooks, events) = recording_hooks();
         let model = route_turn(&router, &state, "fix the typo in the README", &hooks);

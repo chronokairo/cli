@@ -10,7 +10,7 @@ use crate::llm::infer::{
 };
 use crate::llm::model_resolver;
 use crate::llm::provider_chain::FallbackChain;
-use crate::models_dev::{CloudMatch, ModelsDevClient};
+use crate::providers::{CloudMatch, ModelsDevClient};
 
 const BENCH_PROMPT: &str = "Write a Python function that computes fibonacci numbers.";
 const BENCH_TOKENS: usize = 20; // enough to measure TPS without hanging for minutes

@@ -806,8 +806,8 @@ mod tests {
     use super::*;
     use crate::llm::client::LlmClient;
     use crate::llm::router::LlmRouter;
-    use crate::models_dev::types::{Catalog, Cost, Limits, Modalities, ModelInfo, Provider};
-    use crate::models_dev::ModelsDevClient;
+    use crate::providers::types::{Catalog, Cost, Limits, Modalities, ModelInfo, Provider};
+    use crate::providers::ModelsDevClient;
 
     fn model(id: &str, tool: bool, reasoning: bool) -> ModelInfo {
         ModelInfo {

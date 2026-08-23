@@ -618,7 +618,7 @@ fn handle_slash_command(
         }
         "/provider" => {
             let arg = input.trim_start_matches("/provider").trim().to_lowercase();
-            let catalog = crate::models_dev::ModelsDevClient::load();
+            let catalog = crate::providers::ModelsDevClient::load();
             let mut provs: Vec<(String, String, usize)> = catalog
                 .catalog
                 .iter()
@@ -670,14 +670,14 @@ fn handle_slash_command(
                 drop(st);
                 // Cloud models come from the models.dev catalog for the active provider.
                 let provider = app.provider.clone();
-                let catalog = crate::models_dev::ModelsDevClient::load();
+                let catalog = crate::providers::ModelsDevClient::load();
                 let mut cloud_ranked: Vec<(usize, String)> = catalog
                     .provider_models(&provider)
                     .into_iter()
                     .filter(|m| m.tool_call && m.modalities.output.iter().any(|o| o == "text"))
                     .filter(|m| {
                         if provider == "nvidia" {
-                            let base = crate::models_dev::base_id(&m.id);
+                            let base = crate::providers::base_id(&m.id);
                             matches!(
                                 base.as_str(),
                                 "glm-5.2"
@@ -695,7 +695,7 @@ fn handle_slash_command(
                         }
                     })
                     .map(|m| {
-                        let base = crate::models_dev::base_id(&m.id);
+                        let base = crate::providers::base_id(&m.id);
                         let display = if provider == "nvidia" {
                             ranked_model_name(&base)
                         } else {
@@ -901,13 +901,13 @@ fn format_auto_test_scene(record: &crate::llm::router::AutoTestRecord) -> String
 }
 
 fn pinned_candidate_models(provider: &str, state: &Arc<Mutex<AgentState>>) -> Vec<String> {
-    let catalog = crate::models_dev::ModelsDevClient::load();
+    let catalog = crate::providers::ModelsDevClient::load();
     let cloud_candidates: Vec<String> = catalog
         .provider_models(provider)
         .into_iter()
         .filter(|m| m.tool_call && m.modalities.output.iter().any(|o| o == "text"))
         .filter(|m| {
-            let base = crate::models_dev::base_id(&m.id);
+            let base = crate::providers::base_id(&m.id);
             matches!(
                 base.as_str(),
                 "glm-5.2"
@@ -918,7 +918,7 @@ fn pinned_candidate_models(provider: &str, state: &Arc<Mutex<AgentState>>) -> Ve
                     | "nemotron-3-ultra-550b-a55b"
             )
         })
-        .map(|m| crate::models_dev::base_id(&m.id))
+        .map(|m| crate::providers::base_id(&m.id))
         .collect();
 
     let mut candidates = unique_model_ids(cloud_candidates);
@@ -1084,7 +1084,7 @@ fn set_active_model(
                 app.model = best.clone();
                 app.last_auto_test = Some(record.clone());
                 router.set_model(&best);
-                let catalog = crate::models_dev::ModelsDevClient::load();
+                let catalog = crate::providers::ModelsDevClient::load();
                 if catalog
                     .provider_model_api_id(&app.provider, &best)
                     .is_some()
@@ -1114,7 +1114,7 @@ fn set_active_model(
             app.model = best.clone();
             app.last_auto_test = Some(rec.clone());
             router.set_model(&best);
-            let catalog = crate::models_dev::ModelsDevClient::load();
+            let catalog = crate::providers::ModelsDevClient::load();
             if catalog
                 .provider_model_api_id(&app.provider, &best)
                 .is_some()
@@ -1149,7 +1149,7 @@ fn set_active_model(
         // Typed names: resolve against the active provider's catalog so plain
         // cloud ids (e.g. Ollama Cloud "glm-5.2") still route to the cloud.
         let provider = app.provider.clone();
-        let catalog = crate::models_dev::ModelsDevClient::load();
+        let catalog = crate::providers::ModelsDevClient::load();
         is_cloud = catalog.provider_model_api_id(&provider, &clean).is_some();
     }
     if is_cloud {
@@ -1584,7 +1584,7 @@ pub fn run_ui(client: LlmRouter, state: AgentState) -> Result<(), Box<dyn Error>
                         }
                         a.model = best.clone();
                         client.set_model(&best);
-                        let catalog = crate::models_dev::ModelsDevClient::load();
+                        let catalog = crate::providers::ModelsDevClient::load();
                         if catalog.provider_model_api_id(&a.provider, &best).is_some() {
                             client.mark_cloud(&best);
                         }

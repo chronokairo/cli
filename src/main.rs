@@ -11,7 +11,6 @@ mod hw_recommend;
 mod llm;
 mod mcp;
 mod memory;
-mod models_dev;
 mod protocol;
 mod providers;
 mod repo;
@@ -223,6 +222,11 @@ const OLLAMA_CLOUD_DEFAULT_MODEL: &str = "nemotron-3-nano:30b";
 /// Build the LLM router: a local backend (Ollama or local GGUF) plus, when
 /// `--cloud` is given, a cloud backend for the selected provider.
 async fn build_router(cli: &Cli, cfg: &mut Config) -> Result<LlmRouter> {
+    if let Some(ref m) = cli.model {
+        cfg.coder_model = m.clone();
+        cfg.planner_model = m.clone();
+        cfg.summarizer_model = m.clone();
+    }
     let local = if cfg.use_local {
         let model_name = cli.model.as_deref().unwrap_or("gemma3:1b");
         let blob_path = model_resolver::resolve_model(model_name, &cfg.models_dir)?;
@@ -325,7 +329,7 @@ async fn main() -> Result<()> {
     match cli.command {
         Some(Commands::Check) => hw_check().await?,
         Some(Commands::Cloud { query }) => {
-            let catalog = models_dev::ModelsDevClient::load();
+            let catalog = providers::ModelsDevClient::load();
             catalog.print_list(&query);
         }
         Some(Commands::Providers { action }) => {
@@ -694,7 +698,7 @@ fn get_cloud_models() -> Vec<(String, String, String, String, f64)> {
 
 async fn handle_providers(action: ProvidersAction) -> Result<()> {
     use providers::{print_store, test_provider, ProviderEntry, ProviderStore};
-    let catalog_client = tokio::task::spawn_blocking(models_dev::ModelsDevClient::load).await?;
+    let catalog_client = tokio::task::spawn_blocking(providers::ModelsDevClient::load).await?;
     let catalog = &catalog_client.catalog;
 
     match action {

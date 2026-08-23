@@ -35,8 +35,7 @@ C:\Users\luann\Documents\GitHub\anamnesic-coder/
 │   │   └── infer/                 # GGUF reading, tokenizer, engine, GPU kernels
 │   ├── mcp/                       # MCP client (JSON-RPC stdio subprocess)
 │   ├── memory/                    # Short-term + long-term (SQLite) memory
-│   ├── models_dev/                # models.dev catalog client
-│   ├── providers/                 # Provider store, verification
+│   ├── providers/                 # Provider store, verification + models.dev catalog client
 │   ├── repo/                      # Repo scanner, SymbolIndex, RepoMapGenerator, context
 │   ├── skills/                    # Skills system (SKILL.md packs)
 │   ├── terminal/                  # PTY + WebSocket server for browser TUI

@@ -273,7 +273,7 @@ pub fn base_id(id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models_dev::types::{Catalog, Cost, Limits, Modalities, ModelInfo, Provider};
+    use crate::providers::types::{Catalog, Cost, Limits, Modalities, ModelInfo, Provider};
 
     fn model(id: &str, family: &str, tool: bool, cost_in: f64) -> ModelInfo {
         ModelInfo {

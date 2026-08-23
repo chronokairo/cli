@@ -8,7 +8,7 @@ use crate::tools::test;
 use crate::types::plan::PlanStep;
 
 /// How many fix rounds to run after a `.rs` file fails `cargo check`.
-const MAX_FILE_FIX_ATTEMPTS: usize = 2;
+const MAX_FILE_FIX_ATTEMPTS: usize = 3;
 
 fn compress_output(output: &str, label: &str, hooks: &AgentHooks) -> String {
     if output.len() < 200 {
@@ -185,6 +185,12 @@ async fn write_with_verification<F>(
         state.record_blocked_action(format!("write {filename}: {message}"));
         return;
     }
+    // v0.9.5 oracle lock: planner-driven writes can never touch the exam.
+    if let Some(message) = state.locked_path_error(filename) {
+        hooks.warn(&format!("  ✗ {message}"));
+        state.record_blocked_action(format!("planner_write {filename}: {message}"));
+        return;
+    }
     let mut extra = String::new();
     for attempt in 0..=MAX_FILE_FIX_ATTEMPTS {
         let prompt = make_prompt(&extra);
@@ -205,6 +211,45 @@ async fn write_with_verification<F>(
             ));
             return;
         }
+
+        // Pre-mutation Specification-Locked gate: deterministic API/signature
+        // and baseline checks BEFORE any filesystem write or cargo run.
+        let mut violation: Option<String> = None;
+        if let Some(spec) = state.task_spec.clone() {
+            if let Err(rejection) = spec.check_patch(&code, filename) {
+                violation = Some(rejection);
+            }
+        }
+        if violation.is_none() {
+            // Symbol guard: reject invented methods/APIs not present in the RepoMap.
+            let repo_map = crate::repo::RepoMap::build(&state.config.workspace_dir);
+            if let Err(v) =
+                crate::agent::semantic_guard::validate_code_symbols(&code, &repo_map, filename)
+            {
+                violation = Some(v);
+            }
+        }
+
+        if let Some(violation) = violation {
+            if attempt < MAX_FILE_FIX_ATTEMPTS {
+                hooks.warn(&format!(
+                    "  [spec guard] rejection in {} (attempt {}); fixing...",
+                    filename,
+                    attempt + 1
+                ));
+                extra = format!(
+                    "\n\n{violation}\n\nReturn only the COMPLETE corrected file content inside a single code block."
+                );
+                continue;
+            } else {
+                hooks.warn(&format!(
+                    "  ✗ [spec guard] still rejecting {} after retries:\n{violation}",
+                    filename
+                ));
+                return;
+            }
+        }
+
         if let Err(e) = state.files.write_file(filename, &code) {
             hooks.warn(&format!("  ✗ write failed for {}: {e}", filename));
             return;
@@ -227,22 +272,35 @@ async fn write_with_verification<F>(
                     hooks.note("  ✓ cargo check passed");
                     return;
                 }
-                Some(err) if attempt < MAX_FILE_FIX_ATTEMPTS => {
-                    hooks.warn(&format!(
-                        "  cargo check failed (attempt {}); fixing...",
-                        attempt + 1
-                    ));
-                    extra = format!(
-                        "Your previous output failed `cargo check`. Fix the errors below and return the COMPLETE corrected file in a single code block:\n```\n{}\n```",
-                        err
-                    );
-                }
-                Some(err) => {
-                    hooks.warn(&format!(
-                        "  ✗ cargo check still failing after retries:\n{}",
-                        err
-                    ));
-                    return;
+                Some(errors) => {
+                    if attempt < MAX_FILE_FIX_ATTEMPTS {
+                        hooks.warn(&format!(
+                            "  cargo check failed (attempt {}); fixing...",
+                            attempt + 1
+                        ));
+                        let diagnostics = crate::tools::test::extract_diagnostics(&errors);
+                        let scoped_feedback = crate::tools::test::format_scoped_repair_prompt(
+                            &diagnostics,
+                            Some(filename),
+                            &errors,
+                        );
+                        extra = format!(
+                            "\n\n{}\n\nReturn only the COMPLETE corrected file content inside a single code block.",
+                            scoped_feedback
+                        );
+                    } else {
+                        let diagnostics = crate::tools::test::extract_diagnostics(&errors);
+                        let scoped_feedback = crate::tools::test::format_scoped_repair_prompt(
+                            &diagnostics,
+                            Some(filename),
+                            &errors,
+                        );
+                        hooks.warn(&format!(
+                            "  ✗ cargo check still failing after retries:\n{}",
+                            scoped_feedback
+                        ));
+                        return;
+                    }
                 }
             }
         } else {
@@ -302,14 +360,22 @@ async fn execute_step_inner(
                 .or_else(|| extract_path(&step.description))
             {
                 hooks.note(&format!("  Generating [{}]...", filename));
-                let context = grep_context(state);
+                let repo_map = crate::repo::RepoMap::build(&state.config.workspace_dir);
+                let contract_str = state
+                    .task_spec
+                    .as_ref()
+                    .map(|spec| spec.to_prompt_string())
+                    .unwrap_or_default();
+                let repo_str = repo_map.to_prompt_string();
+
                 let fname = filename.clone();
                 let description = step.description.clone();
                 write_with_verification(client, state, &fname, |extra| {
                     format!(
-                        "{}\n\nContext:\n{}\n\nTask:\nCreate file '{}': {}\nReturn only the COMPLETE file content inside a single code block.\n{}",
+                        "{}\n\n{}\n\n{}\n\nTask:\nCreate file '{}': {}\nReturn only the COMPLETE file content inside a single code block.\n{}",
                         CoderPrompt::system(),
-                        context,
+                        repo_str,
+                        contract_str,
                         fname,
                         description,
                         extra
@@ -331,13 +397,23 @@ async fn execute_step_inner(
                     return;
                 }
                 hooks.note(&format!("  Editing [{}]...", filename));
+                let repo_map = crate::repo::RepoMap::build(&state.config.workspace_dir);
+                let contract_str = state
+                    .task_spec
+                    .as_ref()
+                    .map(|spec| spec.to_prompt_string())
+                    .unwrap_or_default();
+                let repo_str = repo_map.to_prompt_string();
+
                 let fname = filename.clone();
                 let file_content = content;
                 let description = step.description.clone();
                 write_with_verification(client, state, &fname, |extra| {
                     format!(
-                        "{}\n\nFile: {}\n\nContent:\n```\n{}\n```\n\nInstruction: {}\n{}\nReturn only the COMPLETE modified file content inside a single code block.",
+                        "{}\n\n{}\n\n{}\n\nFile: {}\n\nContent:\n```\n{}\n```\n\nInstruction: {}\n{}\nReturn only the COMPLETE modified file content inside a single code block.",
                         CoderPrompt::system(),
+                        repo_str,
+                        contract_str,
                         fname,
                         file_content,
                         description,

@@ -41,7 +41,7 @@ mod tests {
         // estimator delegates and returns the CostEstimate shape.
         let router = crate::llm::router::LlmRouter::with_catalog(
             crate::llm::client::LlmClient::ollama("http://localhost:11434"),
-            crate::models_dev::ModelsDevClient {
+            crate::providers::ModelsDevClient {
                 catalog: Default::default(),
             },
         );

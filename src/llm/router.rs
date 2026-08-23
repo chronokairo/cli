@@ -1,6 +1,6 @@
 use crate::llm::client::{ChatCompletion, LlmClient, ResponseFormat, ToolChoice, ToolDef};
 use crate::llm::tier;
-use crate::models_dev::{base_id, ModelsDevClient};
+use crate::providers::{base_id, ModelsDevClient};
 use anyhow::{Context, Result};
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
@@ -114,7 +114,7 @@ impl LlmRouter {
     /// catalog default base URL + the configured/env API key.  Returns the API
     /// base URL on success.
     pub fn set_provider(&self, provider: &str) -> Result<String> {
-        let catalog_client = crate::models_dev::ModelsDevClient::load();
+        let catalog_client = crate::providers::ModelsDevClient::load();
         let (base, key) = crate::providers::ProviderStore::resolve_cloud_credentials(
             provider,
             &catalog_client.catalog,
@@ -518,7 +518,7 @@ impl LlmRouter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models_dev::types::{Catalog, Cost, Limits, Modalities, ModelInfo, Provider};
+    use crate::providers::types::{Catalog, Cost, Limits, Modalities, ModelInfo, Provider};
 
     fn model(id: &str, tool: bool) -> ModelInfo {
         ModelInfo {

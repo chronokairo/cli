@@ -797,9 +797,31 @@ impl OllamaClient {
         on_token: &mut dyn FnMut(&str),
         mut on_reasoning: Option<&mut dyn FnMut(&str)>,
     ) -> Result<ChatCompletion> {
+        let ollama_messages: Vec<serde_json::Value> = messages
+            .into_iter()
+            .map(|mut msg| {
+                if let Some(tool_calls) = msg.get_mut("tool_calls").and_then(|tc| tc.as_array_mut()) {
+                    for tc in tool_calls {
+                        if let Some(func) = tc.get_mut("function") {
+                            if let Some(args_val) = func.get("arguments") {
+                                if let Some(args_str) = args_val.as_str() {
+                                    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(args_str) {
+                                        func["arguments"] = parsed;
+                                    } else {
+                                        func["arguments"] = serde_json::json!({});
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                msg
+            })
+            .collect();
+
         let body = ChatRequest {
             model: model.to_string(),
-            messages,
+            messages: ollama_messages,
             stream: true,
             max_tokens: 16384,
             tools: tools.cloned(),
@@ -889,10 +911,14 @@ impl OllamaClient {
                                 if let Some(args) = tc
                                     .get("function")
                                     .and_then(|f| f.get("arguments"))
-                                    .and_then(|v| v.as_str())
                                 {
-                                    if !args.is_empty() {
-                                        tool_calls[index].function.arguments.push_str(args);
+                                    let args_str = if let Some(s) = args.as_str() {
+                                        s.to_string()
+                                    } else {
+                                        serde_json::to_string(args).unwrap_or_default()
+                                    };
+                                    if !args_str.is_empty() {
+                                        tool_calls[index].function.arguments.push_str(&args_str);
                                     }
                                 }
                             }

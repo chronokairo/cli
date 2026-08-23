@@ -119,6 +119,210 @@ pub fn run_lint(config: &Config) -> Option<VerificationResult> {
     ))
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct CompilerDiagnostic {
+    pub file: Option<String>,
+    pub line: Option<usize>,
+    pub column: Option<usize>,
+    pub code: Option<String>,
+    pub message: String,
+    pub hints: Vec<String>,
+}
+
+/// Extract structured compiler diagnostics from raw compiler/test output.
+pub fn extract_diagnostics(output: &str) -> Vec<CompilerDiagnostic> {
+    let mut diagnostics = Vec::new();
+    let mut current: Option<CompilerDiagnostic> = None;
+
+    for line in output.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        // Pattern 1: Short format `src/storage.rs:28:81: error[E0499]: cannot borrow...`
+        if let Some(err_idx) = trimmed.find(": error") {
+            let prefix = &trimmed[..err_idx];
+            let after = &trimmed[err_idx + 2..]; // `error...` or `error[E0499]: ...`
+            let file_parts: Vec<&str> = prefix.split(':').collect();
+
+            let (file, line_num, col) = if file_parts.len() >= 3 {
+                (
+                    Some(file_parts[0].replace('\\', "/")),
+                    file_parts[1].parse::<usize>().ok(),
+                    file_parts[2].parse::<usize>().ok(),
+                )
+            } else if file_parts.len() == 2 {
+                (
+                    Some(file_parts[0].replace('\\', "/")),
+                    file_parts[1].parse::<usize>().ok(),
+                    None,
+                )
+            } else {
+                (Some(prefix.replace('\\', "/")), None, None)
+            };
+
+            let code = if let Some(start) = after.find('[') {
+                if let Some(end) = after.find(']') {
+                    if end > start {
+                        Some(after[start + 1..end].to_string())
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            let message = after
+                .split(':')
+                .nth(1)
+                .unwrap_or(after)
+                .trim()
+                .to_string();
+
+            if let Some(diag) = current.take() {
+                diagnostics.push(diag);
+            }
+
+            current = Some(CompilerDiagnostic {
+                file,
+                line: line_num,
+                column: col,
+                code,
+                message,
+                hints: Vec::new(),
+            });
+            continue;
+        }
+
+        // Pattern 2: Standard rustc format `error[E0499]: cannot borrow...`
+        if trimmed.starts_with("error[") || trimmed.starts_with("error:") {
+            if let Some(diag) = current.take() {
+                diagnostics.push(diag);
+            }
+
+            let code = if let Some(start) = trimmed.find('[') {
+                if let Some(end) = trimmed.find(']') {
+                    if end > start {
+                        Some(trimmed[start + 1..end].to_string())
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            let message = trimmed
+                .split(':')
+                .nth(1)
+                .unwrap_or(trimmed)
+                .trim()
+                .to_string();
+
+            current = Some(CompilerDiagnostic {
+                file: None,
+                line: None,
+                column: None,
+                code,
+                message,
+                hints: Vec::new(),
+            });
+            continue;
+        }
+
+        // Location line `--> src/storage.rs:28:81`
+        if trimmed.starts_with("--> ") {
+            let loc = trimmed.trim_start_matches("--> ").trim();
+            let parts: Vec<&str> = loc.split(':').collect();
+            if let Some(diag) = current.as_mut() {
+                if parts.len() >= 3 {
+                    diag.file = Some(parts[0].replace('\\', "/"));
+                    diag.line = parts[1].parse::<usize>().ok();
+                    diag.column = parts[2].parse::<usize>().ok();
+                } else if parts.len() == 2 {
+                    diag.file = Some(parts[0].replace('\\', "/"));
+                    diag.line = parts[1].parse::<usize>().ok();
+                }
+            }
+            continue;
+        }
+
+        // Hints & suggestions `help: ...` or `note: ...`
+        if trimmed.starts_with("help: ") || trimmed.starts_with("note: ") {
+            if let Some(diag) = current.as_mut() {
+                diag.hints.push(trimmed.to_string());
+            }
+        }
+    }
+
+    if let Some(diag) = current {
+        diagnostics.push(diag);
+    }
+
+    diagnostics
+}
+
+/// Format a scoped, concise repair prompt from compiler diagnostics targeting a file.
+pub fn format_scoped_repair_prompt(
+    diagnostics: &[CompilerDiagnostic],
+    target_file: Option<&str>,
+    raw_fallback: &str,
+) -> String {
+    let relevant: Vec<&CompilerDiagnostic> = if let Some(target) = target_file {
+        let norm_target = target.replace('\\', "/");
+        let matched: Vec<_> = diagnostics
+            .iter()
+            .filter(|d| d.file.as_deref().map(|f| f.ends_with(&norm_target) || norm_target.ends_with(f)).unwrap_or(false))
+            .collect();
+        if matched.is_empty() {
+            diagnostics.iter().collect()
+        } else {
+            matched
+        }
+    } else {
+        diagnostics.iter().collect()
+    };
+
+    if relevant.is_empty() {
+        return format!("Compiler check failed:\n{}", raw_fallback.trim());
+    }
+
+    let mut out = String::new();
+    let header_file = target_file.unwrap_or("workspace");
+    out.push_str(&format!("Compiler constraints to resolve in `{header_file}`:\n"));
+
+    for diag in &relevant {
+        let code_str = diag.code.as_deref().map(|c| format!(" [{c}]")).unwrap_or_default();
+        let loc_str = match (diag.file.as_deref(), diag.line) {
+            (Some(f), Some(l)) => format!(" in `{f}:{l}`"),
+            (_, Some(l)) => format!(" at line {l}"),
+            (Some(f), None) => format!(" in `{f}`"),
+            _ => String::new(),
+        };
+        out.push_str(&format!("• Error{code_str}{loc_str}: {}\n", diag.message));
+        for hint in &diag.hints {
+            out.push_str(&format!("    ↳ {}\n", hint));
+        }
+    }
+
+    out.push_str("\nOperational Constraints:\n");
+    if let Some(target) = target_file {
+        out.push_str(&format!("1. Resolve these constraints strictly within `{target}` using `edit_file`.\n"));
+    } else {
+        out.push_str("1. Resolve these constraints using `edit_file` on the affected files.\n");
+    }
+    out.push_str("2. Preserve existing struct and method signatures.\n");
+    out.push_str("3. Do not invent non-existent root modules.\n");
+
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -147,4 +351,44 @@ mod tests {
         assert_eq!(cargo_command("duration"), "cargo test duration");
         assert_eq!(cargo_command("cargo check"), "cargo check");
     }
+
+    #[test]
+    fn extracts_rustc_diagnostics_correctly() {
+        let stderr = r#"
+error[E0499]: cannot borrow `*self` as mutable more than once at a time
+  --> src/storage.rs:28:81
+   |
+28 |         if let (Some(from_account), Some(to_account)) = (self.get_mut(from_id), self.get_mut(to_id)) {
+   |                                                         ------------------------^^^^----------------
+   |                                                         ||                      |
+   |                                                         ||                      second mutable borrow occurs here
+help: try adding a local storing this
+        "#;
+
+        let diags = extract_diagnostics(stderr);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].code.as_deref(), Some("E0499"));
+        assert_eq!(diags[0].file.as_deref(), Some("src/storage.rs"));
+        assert_eq!(diags[0].line, Some(28));
+        assert!(diags[0].message.contains("cannot borrow"));
+        assert_eq!(diags[0].hints.len(), 1);
+        assert!(diags[0].hints[0].contains("help: try adding a local"));
+
+        let prompt = format_scoped_repair_prompt(&diags, Some("src/storage.rs"), stderr);
+        assert!(prompt.contains("Compiler constraints to resolve in `src/storage.rs`"));
+        assert!(prompt.contains("Error [E0499] in `src/storage.rs:28`"));
+        assert!(prompt.contains("cannot borrow"));
+        assert!(prompt.contains("help: try adding a local"));
+    }
+
+    #[test]
+    fn extracts_short_message_diagnostics_correctly() {
+        let stderr = "src\\service.rs:34:9: error[E0594]: cannot assign to `from_account.balance`\nhelp: consider specifying this binding";
+        let diags = extract_diagnostics(stderr);
+        assert_eq!(diags.len(), 1);
+        assert_eq!(diags[0].code.as_deref(), Some("E0594"));
+        assert_eq!(diags[0].file.as_deref(), Some("src/service.rs"));
+        assert_eq!(diags[0].line, Some(34));
+    }
 }
+
