@@ -431,15 +431,20 @@ impl App {
     /// (italic, subdued) and does not count as the assistant's response.
     /// Flushes to the transcript periodically so thinking appears live.
     pub fn feed_reasoning_delta(&mut self, text: &str) {
-        const MAX_REASONING_CHARS: usize = 8_000;
+        const MAX_REASONING_CHARS: usize = 32_000;
         const FLUSH_THRESHOLD: usize = 120;
         if self.reasoning.len() < MAX_REASONING_CHARS {
             self.reasoning.push_str(text);
         }
         if self.reasoning.len() >= FLUSH_THRESHOLD {
-            self.messages
-                .push(("Thinking".to_string(), self.reasoning.clone()));
-            self.reasoning.clear();
+            let chunk = std::mem::take(&mut self.reasoning);
+            if let Some((role, content)) = self.messages.last_mut() {
+                if role == "Thinking" {
+                    content.push_str(&chunk);
+                    return;
+                }
+            }
+            self.messages.push(("Thinking".to_string(), chunk));
         }
     }
 
@@ -449,9 +454,14 @@ impl App {
     /// Any remaining tail (< 120 chars) is flushed to the transcript first.
     pub fn reset_reasoning(&mut self) {
         if !self.reasoning.is_empty() {
-            self.messages
-                .push(("Thinking".to_string(), self.reasoning.clone()));
-            self.reasoning.clear();
+            let chunk = std::mem::take(&mut self.reasoning);
+            if let Some((role, content)) = self.messages.last_mut() {
+                if role == "Thinking" {
+                    content.push_str(&chunk);
+                    return;
+                }
+            }
+            self.messages.push(("Thinking".to_string(), chunk));
         }
     }
 
@@ -1713,9 +1723,7 @@ pub fn run_ui(client: LlmRouter, state: AgentState) -> Result<(), Box<dyn Error>
                         a.pending_tasks = a.pending_tasks.saturating_sub(1);
                         if a.pending_tasks == 0 {
                             a.loading = false;
-                            a.status =
-                                "Ready · Enter to send · ↑/↓ history · PgUp/PgDn scroll · mouse wheel · Esc interrupt"
-                                    .into();
+                            a.status = "Ready".into();
                         } else {
                             a.status =
                                 format!("Working… ({} background tasks queued)", a.pending_tasks);
@@ -1731,13 +1739,13 @@ pub fn run_ui(client: LlmRouter, state: AgentState) -> Result<(), Box<dyn Error>
                         a.end_streaming(None);
                         a.add_message("Error", &message);
                         a.loading = false;
-                        a.status = "Failed · Enter to retry · Esc interrupt".into();
+                        a.status = "Failed".into();
                     }
                     AgentEvent::Interrupted => {
                         a.end_streaming(None);
                         a.add_message("System", "Turn interrupted by user.");
                         a.loading = false;
-                        a.status = "Interrupted · Enter to send · Esc interrupt".into();
+                        a.status = "Interrupted".into();
                     }
                     AgentEvent::TextDelta { text } => {
                         a.feed_text_delta(&text);
@@ -2782,6 +2790,11 @@ fn draw<B: ratatui::backend::Backend>(
                 " ⚠ ".to_string(),
                 Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
             )
+        } else if app.status.starts_with("Ready") {
+            (
+                " ● ".to_string(),
+                Style::default().fg(Color::Green),
+            )
         } else {
             (
                 " ℹ ".to_string(),
@@ -3403,39 +3416,84 @@ fn extract_tool_name(content: &str) -> String {
     }
 }
 
+/// Flush accumulated thinking content into a single cohesive block.
+fn flush_thinking_rollup(
+    app: &App,
+    buffer: &mut Vec<String>,
+    lines: &mut Vec<Line<'static>>,
+) {
+    if buffer.is_empty() {
+        return;
+    }
+    let total_content = buffer.join(" ");
+    buffer.clear();
+    let trimmed = total_content.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+    if app.reasoning_expanded {
+        let mut is_first = true;
+        for line in trimmed.lines() {
+            let t = line.trim();
+            if t.is_empty() {
+                continue;
+            }
+            let prefix = if is_first {
+                is_first = false;
+                "💭 "
+            } else {
+                "   "
+            };
+            lines.push(Line::from(vec![
+                Span::styled(prefix, Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    t.to_string(),
+                    Style::default()
+                        .fg(Color::DarkGray)
+                        .add_modifier(Modifier::ITALIC),
+                ),
+            ]));
+        }
+    } else {
+        let summary = format!("Thinking ({} chars)", trimmed.chars().count());
+        lines.extend(status_message_lines("thinking", &summary));
+    }
+}
+
 fn flatten_messages(app: &App) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     let mut tool_count = 0usize;
     let mut tool_buffer = Vec::new();
+    let mut thinking_buffer = Vec::new();
     let mut in_plan = false;
+
     for (role, content) in &app.messages {
         match role.to_ascii_lowercase().as_str() {
             "user" => {
                 in_plan = false;
+                flush_thinking_rollup(app, &mut thinking_buffer, &mut lines);
                 flush_tool_rollup(app, &mut tool_count, &mut tool_buffer, &mut lines);
                 lines.extend(user_message_lines(content));
             }
             "assistant" => {
                 in_plan = false;
+                flush_thinking_rollup(app, &mut thinking_buffer, &mut lines);
                 flush_tool_rollup(app, &mut tool_count, &mut tool_buffer, &mut lines);
                 lines.extend(assistant_message_lines(content));
             }
             "thinking" => {
                 in_plan = false;
                 flush_tool_rollup(app, &mut tool_count, &mut tool_buffer, &mut lines);
-                if app.reasoning_expanded {
-                    lines.extend(status_message_lines(role, content));
-                } else {
-                    let summary = format!("Thinking ({} chars)", content.len());
-                    lines.extend(status_message_lines("thinking", &summary));
-                }
+                thinking_buffer.push(content.clone());
             }
             "plan" => {
                 in_plan = true;
+                flush_thinking_rollup(app, &mut thinking_buffer, &mut lines);
                 flush_tool_rollup(app, &mut tool_count, &mut tool_buffer, &mut lines);
                 lines.extend(status_message_lines(role, content));
             }
             "tool" => {
+                flush_thinking_rollup(app, &mut thinking_buffer, &mut lines);
                 if app.tool_calls_expanded {
                     flush_tool_rollup(app, &mut tool_count, &mut tool_buffer, &mut lines);
                     if in_plan {
@@ -3450,11 +3508,13 @@ fn flatten_messages(app: &App) -> Vec<Line<'static>> {
             }
             _ => {
                 in_plan = false;
+                flush_thinking_rollup(app, &mut thinking_buffer, &mut lines);
                 flush_tool_rollup(app, &mut tool_count, &mut tool_buffer, &mut lines);
                 lines.extend(status_message_lines(role, content));
             }
         }
     }
+    flush_thinking_rollup(app, &mut thinking_buffer, &mut lines);
     flush_tool_rollup(app, &mut tool_count, &mut tool_buffer, &mut lines);
     lines
 }
@@ -3738,7 +3798,7 @@ fn push_block_sep(spans: &mut Vec<Span<'static>>, sep: &str) {
 }
 
 fn render_markdown_lines(text: &str) -> Option<Vec<Span<'static>>> {
-    use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
+    use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
     let mut opts = Options::empty();
     opts.insert(Options::ENABLE_TABLES);
     opts.insert(Options::ENABLE_STRIKETHROUGH);
@@ -3749,34 +3809,32 @@ fn render_markdown_lines(text: &str) -> Option<Vec<Span<'static>>> {
     let mut in_bold = false;
     let mut in_italic = false;
     let mut in_strike = false;
+    let mut in_heading = false;
+    let mut in_table_head = false;
+    let mut first_cell_in_row = true;
     let mut code_text = String::new();
     for event in parser {
         match event {
             Event::Text(t) => {
                 if in_code {
                     code_text.push_str(t.as_ref());
-                } else if in_bold || in_italic || in_strike {
-                    spans.push(Span::styled(
-                        t.as_ref().to_string(),
-                        Style::default()
-                            .add_modifier(if in_bold {
-                                Modifier::BOLD
-                            } else {
-                                Modifier::empty()
-                            })
-                            .add_modifier(if in_italic {
-                                Modifier::ITALIC
-                            } else {
-                                Modifier::empty()
-                            })
-                            .add_modifier(if in_strike {
-                                Modifier::DIM
-                            } else {
-                                Modifier::empty()
-                            }),
-                    ));
                 } else {
-                    spans.push(Span::raw(t.as_ref().to_string()));
+                    let mut style = Style::default();
+                    if in_heading {
+                        style = style.fg(Color::Cyan).add_modifier(Modifier::BOLD);
+                    } else if in_table_head {
+                        style = style.fg(Color::LightYellow).add_modifier(Modifier::BOLD);
+                    }
+                    if in_bold {
+                        style = style.add_modifier(Modifier::BOLD);
+                    }
+                    if in_italic {
+                        style = style.add_modifier(Modifier::ITALIC);
+                    }
+                    if in_strike {
+                        style = style.add_modifier(Modifier::DIM);
+                    }
+                    spans.push(Span::styled(t.as_ref().to_string(), style));
                 }
             }
             Event::Code(t) => {
@@ -3800,22 +3858,46 @@ fn render_markdown_lines(text: &str) -> Option<Vec<Span<'static>>> {
                         push_block_sep(&mut spans, "\n\n");
                     }
                 }
-                // Block-level containers that pulldown-cmark does NOT signal
-                // with SoftBreak/Paragraph events: list items and headings
-                // only emit `Text` between `Start`/`End`, so without explicit
-                // separators consecutive items render glued on one line.
-                Tag::Heading { .. }
-                | Tag::List(_)
-                | Tag::Item
-                | Tag::BlockQuote(_)
-                | Tag::FootnoteDefinition(_)
-                | Tag::DefinitionList
-                | Tag::DefinitionListTitle
-                | Tag::DefinitionListDefinition
-                | Tag::Table(_)
-                | Tag::TableHead
-                | Tag::TableRow => {
+                Tag::Heading { level, .. } => {
+                    in_heading = true;
+                    push_block_sep(&mut spans, "\n\n");
+                    let prefix = match level {
+                        HeadingLevel::H1 => "◆ ",
+                        HeadingLevel::H2 => "◈ ",
+                        _ => "▪ ",
+                    };
+                    spans.push(Span::styled(
+                        prefix.to_string(),
+                        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                    ));
+                }
+                Tag::List(_) => {
                     push_block_sep(&mut spans, "\n");
+                }
+                Tag::Item => {
+                    push_block_sep(&mut spans, "\n");
+                    spans.push(Span::styled("• ", Style::default().fg(Color::LightCyan)));
+                }
+                Tag::TableHead => {
+                    in_table_head = true;
+                    first_cell_in_row = true;
+                    push_block_sep(&mut spans, "\n");
+                    spans.push(Span::styled("│ ", Style::default().fg(Color::DarkGray)));
+                }
+                Tag::TableRow => {
+                    first_cell_in_row = true;
+                    push_block_sep(&mut spans, "\n");
+                    spans.push(Span::styled("│ ", Style::default().fg(Color::DarkGray)));
+                }
+                Tag::TableCell => {
+                    if !first_cell_in_row {
+                        spans.push(Span::styled(" │ ", Style::default().fg(Color::DarkGray)));
+                    }
+                    first_cell_in_row = false;
+                }
+                Tag::BlockQuote(_) => {
+                    push_block_sep(&mut spans, "\n");
+                    spans.push(Span::styled("▎ ", Style::default().fg(Color::Gray)));
                 }
                 Tag::CodeBlock(_) => {
                     in_code = true;
@@ -3828,27 +3910,36 @@ fn render_markdown_lines(text: &str) -> Option<Vec<Span<'static>>> {
                 _ => {}
             },
             Event::End(tag) => match tag {
+                TagEnd::Heading(_) => {
+                    in_heading = false;
+                    push_block_sep(&mut spans, "\n");
+                }
+                TagEnd::TableHead => {
+                    in_table_head = false;
+                    spans.push(Span::styled(" │", Style::default().fg(Color::DarkGray)));
+                    push_block_sep(&mut spans, "\n");
+                    spans.push(Span::styled(
+                        "├──────────────────────────┼──────────────────────────────────────────┤",
+                        Style::default().fg(Color::DarkGray),
+                    ));
+                }
+                TagEnd::TableRow => {
+                    spans.push(Span::styled(" │", Style::default().fg(Color::DarkGray)));
+                }
                 TagEnd::CodeBlock => {
                     spans.push(Span::styled(
                         code_text.clone(),
                         Style::default()
-                            .fg(Color::Yellow)
+                            .fg(Color::LightYellow)
                             .bg(Color::Rgb(30, 30, 30))
                             .add_modifier(Modifier::BOLD),
                     ));
                     in_code = false;
                     code_text.clear();
                 }
-                TagEnd::Heading(_)
-                | TagEnd::List(_)
+                TagEnd::List(_)
                 | TagEnd::BlockQuote(_)
-                | TagEnd::FootnoteDefinition
-                | TagEnd::DefinitionList
-                | TagEnd::DefinitionListTitle
-                | TagEnd::DefinitionListDefinition
-                | TagEnd::Table
-                | TagEnd::TableHead
-                | TagEnd::TableRow => {
+                | TagEnd::Table => {
                     push_block_sep(&mut spans, "\n");
                 }
                 TagEnd::Strong => in_bold = false,
@@ -3859,7 +3950,7 @@ fn render_markdown_lines(text: &str) -> Option<Vec<Span<'static>>> {
             Event::Rule => {
                 spans.push(Span::styled(
                     "─".repeat(40),
-                    Style::default().fg(Color::Gray),
+                    Style::default().fg(Color::DarkGray),
                 ));
             }
             _ => {}
@@ -4634,6 +4725,41 @@ mod tests {
         assert!(!full.contains("Seçãoconteúdo"), "glued heading: {full}");
         assert!(texts.iter().any(|t| t.contains("Seção")), "got: {full}");
         assert!(texts.iter().any(|t| t.contains("mais")), "got: {full}");
+    }
+
+    #[test]
+    fn markdown_table_cells_do_not_glue() {
+        let mut app = App::new("model");
+        app.add_message(
+            "Assistant",
+            "| Camada | Responsabilidade |\n|---|---|\n| Tool Layer | Trait Tool único |\n| Loop Layer | while-loop puro |",
+        );
+        let lines = flatten_messages(&app);
+        let texts: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
+        let full = texts.join("|");
+        assert!(
+            !full.contains("CamadaResponsabilidade"),
+            "table cells glued: {full}"
+        );
+        assert!(
+            !full.contains("Tool LayerTrait"),
+            "table cells glued: {full}"
+        );
+        assert!(texts.iter().any(|t| t.contains("Camada")), "got: {full}");
+        assert!(texts.iter().any(|t| t.contains("Tool Layer")), "got: {full}");
+    }
+
+    #[test]
+    fn thinking_stream_flushes_as_unified_block() {
+        let mut app = App::new("model");
+        app.reasoning_expanded = true;
+        app.feed_reasoning_delta("The user is asking about the project. ");
+        app.feed_reasoning_delta("Let me explore more.");
+        app.reset_reasoning();
+        let lines = flatten_messages(&app);
+        let texts: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
+        let thought_count = texts.iter().filter(|t| t.contains("💭")).count();
+        assert_eq!(thought_count, 1, "expected 1 thinking block, got: {texts:?}");
     }
 
     #[test]
