@@ -336,7 +336,7 @@ pub fn print_store(store: &ProviderStore, catalog: &Catalog) {
 }
 
 /// Show at most min(4, len/2) chars for keys > 4 chars, and completely mask shorter keys.
-fn mask_key(key: &str) -> String {
+pub fn mask_key(key: &str) -> String {
     let len = key.len();
     if len <= 4 {
         "****".to_string()
@@ -345,6 +345,7 @@ fn mask_key(key: &str) -> String {
         format!("{}****", &key[..visible])
     }
 }
+
 
 #[cfg(test)]
 mod tests {

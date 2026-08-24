@@ -12,7 +12,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
     Terminal,
 };
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -59,11 +59,19 @@ const SLASH_COMMANDS: &[(&str, &str)] = &[
     ("/status", "Show model, provider, directory, context tokens"),
     (
         "/model",
-        "Select the active model (no arg = pick from best models for NVIDIA)",
+        "Select active model (no arg = pick from list, or /model <name>)",
     ),
     (
         "/provider",
-        "Select cloud model provider (no arg = pick from list)",
+        "Select cloud provider and configure API key (or /provider <name> [key])",
+    ),
+    (
+        "/providers",
+        "Manage cloud providers and keys (list, show, set <provider> <key>)",
+    ),
+    (
+        "/key",
+        "Set or update API key for a provider (/key [provider] <api-key>)",
     ),
     ("/reset", "Reset session"),
     ("/resume", "Resume a saved session (picker)"),
@@ -179,6 +187,9 @@ pub struct App {
     pub provider_selector: bool,
     pub provider_items: Vec<String>,
     pub provider_selected: usize,
+    pub key_input_popup: bool,
+    pub key_input_provider: String,
+    pub key_input_value: String,
     /// Pending approval prompt (`ask` policy): the worker blocks until the
     /// user answers, but rendering and input keep running.
     pub pending_approval: Option<ApprovalRequest>,
@@ -310,6 +321,9 @@ impl App {
             provider_selector: false,
             provider_items: Vec::new(),
             provider_selected: 0,
+            key_input_popup: false,
+            key_input_provider: String::new(),
+            key_input_value: String::new(),
             pending_approval: None,
             pending_plan_approval: None,
             quit_pending: false,
@@ -616,125 +630,102 @@ fn handle_slash_command(
             app.status = "Workspace info — ↑/↓ navigate · Enter toggle · Esc close".into();
             true
         }
-        "/provider" => {
-            let arg = input.trim_start_matches("/provider").trim().to_lowercase();
-            let catalog = crate::providers::ModelsDevClient::load();
-            let mut provs: Vec<(String, String, usize)> = catalog
-                .catalog
-                .iter()
-                .map(|(pid, p)| {
-                    let n = p
-                        .models
-                        .values()
-                        .filter(|m| m.tool_call && m.modalities.output.iter().any(|o| o == "text"))
-                        .count();
-                    (pid.clone(), p.name.clone(), n)
-                })
-                .filter(|(_, _, n)| *n > 0)
-                .collect();
-            provs.sort_by_key(|item| item.1.to_lowercase());
-            if !arg.is_empty() {
-                provs.retain(|(pid, name, _)| {
-                    pid.to_lowercase().contains(&arg) || name.to_lowercase().contains(&arg)
-                });
-            }
-            if provs.is_empty() {
-                let msg = if arg.is_empty() {
-                    "No cloud providers with tool-capable models found in the models.dev catalog (offline?).".to_string()
-                } else {
-                    format!("No provider matches \"{arg}\".")
-                };
-                app.add_message("System", &msg);
-            } else if provs.len() == 1 && !arg.is_empty() {
-                set_active_provider(app, state, router, &provs[0].0);
+        cmd if cmd == "/provider" || cmd.starts_with("/provider ") => {
+            let arg = input.trim_start_matches("/provider").trim();
+            if arg.is_empty() {
+                open_provider_selector(app, "");
             } else {
-                app.provider_items = provs
-                    .iter()
-                    .map(|(pid, name, n)| format!("{} — {} ({n} models)", pid, name))
-                    .collect();
-                app.provider_selected = app
-                    .provider_items
-                    .iter()
-                    .position(|s| s.starts_with(&format!("{} —", app.provider)))
-                    .unwrap_or(0);
-                app.provider_selector = true;
+                let parts: Vec<&str> = arg.split_whitespace().collect();
+                if parts.len() >= 2 {
+                    let prov = parts[0].to_lowercase();
+                    let key = parts[1..].join(" ");
+                    if let Err(e) = save_provider_key(&prov, &key) {
+                        app.add_message("Error", &format!("Failed to save key: {e}"));
+                    } else {
+                        app.add_message("System", &format!("✓ API key saved for '{prov}'"));
+                        set_active_provider(app, state, router, &prov);
+                        open_model_selector(app, state);
+                    }
+                } else {
+                    let prov = parts[0].to_lowercase();
+                    let store = crate::providers::ProviderStore::load();
+                    let catalog_client = crate::providers::ModelsDevClient::load();
+                    let has_key = store.api_key(&prov).is_some()
+                        || crate::providers::ProviderStore::resolve_cloud_credentials(&prov, &catalog_client.catalog).is_ok();
+                    if has_key {
+                        set_active_provider(app, state, router, &prov);
+                        open_model_selector(app, state);
+                    } else {
+                        app.key_input_provider = prov.clone();
+                        app.key_input_value = String::new();
+                        app.key_input_popup = true;
+                        app.status = format!("Enter API key for {prov} (Enter to confirm, Esc to cancel)");
+                    }
+                }
             }
             true
         }
-        "/model" => {
+        cmd if cmd == "/providers" || cmd.starts_with("/providers ") => {
+            let arg = input.trim_start_matches("/providers").trim();
+            if arg.is_empty() || arg.eq_ignore_ascii_case("list") {
+                open_provider_selector(app, "");
+            } else if arg.eq_ignore_ascii_case("show") {
+                let store = crate::providers::ProviderStore::load();
+                let mut out = format!("Configured cloud providers ({}):\n", crate::providers::ProviderStore::config_path_display());
+                for (pid, entry) in &store.providers {
+                    let key_preview = entry.api_key.as_deref().map(crate::providers::mask_key).unwrap_or_else(|| "—".into());
+                    out.push_str(&format!("  • {:<14} key: {:<12} enabled: {}\n", pid, key_preview, entry.enabled));
+                }
+                app.add_message("System", &out);
+            } else if arg.starts_with("set ") {
+                let rest = arg.trim_start_matches("set ").trim();
+                let parts: Vec<&str> = rest.split_whitespace().collect();
+                if parts.len() >= 2 {
+                    let prov = parts[0].to_lowercase();
+                    let key = parts[1..].join(" ");
+                    if let Err(e) = save_provider_key(&prov, &key) {
+                        app.add_message("Error", &format!("Failed to save key: {e}"));
+                    } else {
+                        app.add_message("System", &format!("✓ API key saved for '{prov}'"));
+                        set_active_provider(app, state, router, &prov);
+                        open_model_selector(app, state);
+                    }
+                } else {
+                    app.add_message("Error", "Usage: /providers set <provider> <api-key>");
+                }
+            } else {
+                open_provider_selector(app, arg);
+            }
+            true
+        }
+        cmd if cmd == "/key" || cmd.starts_with("/key ") => {
+            let arg = input.trim_start_matches("/key").trim();
+            if arg.is_empty() {
+                app.key_input_provider = app.provider.clone();
+                app.key_input_value = String::new();
+                app.key_input_popup = true;
+                app.status = format!("Enter API key for {} (Enter to confirm, Esc to cancel)", app.provider);
+            } else {
+                let parts: Vec<&str> = arg.split_whitespace().collect();
+                let (prov, key) = if parts.len() >= 2 {
+                    (parts[0].to_lowercase(), parts[1..].join(" "))
+                } else {
+                    (app.provider.clone(), parts[0].to_string())
+                };
+                if let Err(e) = save_provider_key(&prov, &key) {
+                    app.add_message("Error", &format!("Failed to save key: {e}"));
+                } else {
+                    app.add_message("System", &format!("✓ API key saved for '{prov}'"));
+                    set_active_provider(app, state, router, &prov);
+                    open_model_selector(app, state);
+                }
+            }
+            true
+        }
+        cmd if cmd == "/model" || cmd.starts_with("/model ") => {
             let arg = input.trim_start_matches("/model").trim();
             if arg.is_empty() {
-                let st = state.lock().unwrap();
-                let local = crate::llm::model_resolver::list_models(&st.config.models_dir);
-                let dir = st.config.models_dir.clone();
-                drop(st);
-                // Cloud models come from the models.dev catalog for the active provider.
-                let provider = app.provider.clone();
-                let catalog = crate::providers::ModelsDevClient::load();
-                let mut cloud_ranked: Vec<(usize, String)> = catalog
-                    .provider_models(&provider)
-                    .into_iter()
-                    .filter(|m| m.tool_call && m.modalities.output.iter().any(|o| o == "text"))
-                    .filter(|m| {
-                        if provider == "nvidia" {
-                            let base = crate::providers::base_id(&m.id);
-                            matches!(
-                                base.as_str(),
-                                "glm-5.2"
-                                    | "qwen3.5-397b-a17b"
-                                    | "deepseek-v4-pro"
-                                    | "kimi-k2.6"
-                                    | "minimax-m3"
-                                    | "nemotron-3-ultra-550b-a55b"
-                            )
-                        } else {
-                            match &m.release_date {
-                                Some(d) if d.starts_with("2026") => m.open_weights,
-                                _ => false,
-                            }
-                        }
-                    })
-                    .map(|m| {
-                        let base = crate::providers::base_id(&m.id);
-                        let display = if provider == "nvidia" {
-                            ranked_model_name(&base)
-                        } else {
-                            base.clone()
-                        };
-                        (ranked_model_order(&base), display)
-                    })
-                    .collect();
-                cloud_ranked.sort_by_key(|(rank, _)| *rank);
-                let cloud: Vec<String> = cloud_ranked
-                    .into_iter()
-                    .map(|(_, name)| format!("{} [cloud]", name))
-                    .collect();
-                // Add "auto" option for NVIDIA provider.
-                let mut items: Vec<String> = local.clone();
-                if provider == "nvidia" {
-                    items.push("auto".into());
-                }
-                items.extend(unique_model_ids(cloud));
-                items.dedup();
-                if items.is_empty() {
-                    app.add_message(
-                        "System",
-                        &format!("No models found in {}. models.dev catalog also empty (offline?). Use /model <name> to set one anyway.", dir.display()),
-                    );
-                    app.status =
-                        "Ready · Enter to send · ↑/↓ history · PgUp/PgDn scroll · mouse wheel · Esc interrupt".into();
-                } else {
-                    app.model_items = items;
-                    app.model_selected = app
-                        .model_items
-                        .iter()
-                        .position(|m| {
-                            let trimmed = m.trim_end_matches(" [cloud]");
-                            trimmed.eq_ignore_ascii_case(&app.model)
-                        })
-                        .unwrap_or(0);
-                    app.model_selector = true;
-                }
+                open_model_selector(app, state);
             } else {
                 set_active_model(app, state, router, arg, auto_test_tx);
             }
@@ -900,23 +891,194 @@ fn format_auto_test_scene(record: &crate::llm::router::AutoTestRecord) -> String
     out
 }
 
+// Save an API key for a provider to ProviderStore and GlobalSettings and set in env.
+fn save_provider_key(provider: &str, key: &str) -> anyhow::Result<()> {
+    let mut store = crate::providers::ProviderStore::load();
+    store.set_key(provider, key);
+    store.save()?;
+
+    let catalog_client = crate::providers::ModelsDevClient::load();
+    let env_name = catalog_client
+        .catalog
+        .get(provider)
+        .and_then(|p| p.env.first().map(|s| s.as_str()))
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| format!("{}_API_KEY", provider.to_uppercase().replace('-', "_")));
+
+    let mut globals = crate::config::GlobalSettings::load();
+    globals.set_env(&env_name, key);
+    let _ = globals.save();
+    std::env::set_var(&env_name, key);
+    Ok(())
+}
+
+/// Open the provider selector popup with status indicator for configured keys.
+fn open_provider_selector(app: &mut App, filter_query: &str) {
+    let catalog = crate::providers::ModelsDevClient::load();
+    let store = crate::providers::ProviderStore::load();
+    let env_detected = crate::providers::ProviderStore::detect_env_keys(&catalog.catalog);
+    let env_providers: std::collections::HashSet<String> = env_detected
+        .into_iter()
+        .map(|(p, _, _)| p)
+        .collect();
+
+    let mut provs: Vec<(String, String, usize, bool)> = catalog
+        .catalog
+        .iter()
+        .map(|(pid, p)| {
+            let n = p
+                .models
+                .values()
+                .filter(|m| m.modalities.output.is_empty() || m.modalities.output.iter().any(|o| o == "text"))
+                .count();
+            let has_key = store.api_key(pid).is_some() || env_providers.contains(pid);
+            (pid.clone(), p.name.clone(), n, has_key)
+        })
+        .collect();
+
+    if !filter_query.is_empty() {
+        let q = filter_query.to_lowercase();
+        provs.retain(|(pid, name, _, _)| {
+            pid.to_lowercase().contains(&q) || name.to_lowercase().contains(&q)
+        });
+    }
+
+    // Configured providers first (alphabetically), then unconfigured (alphabetically)
+    provs.sort_by(|a, b| {
+        b.3.cmp(&a.3)
+            .then_with(|| a.1.to_lowercase().cmp(&b.1.to_lowercase()))
+    });
+
+    if provs.is_empty() {
+        let msg = if filter_query.is_empty() {
+            "No cloud providers found in the models.dev catalog (offline?).".to_string()
+        } else {
+            format!("No provider matches \"{filter_query}\".")
+        };
+        app.add_message("System", &msg);
+    } else {
+        app.provider_items = provs
+            .iter()
+            .map(|(pid, name, n, has_key)| {
+                let key_tag = if *has_key {
+                    "✓ [key set]"
+                } else {
+                    "○ [no key]"
+                };
+                format!("{:<14} — {:<22} ({n} models) {key_tag}", pid, name)
+            })
+            .collect();
+        app.provider_selected = app
+            .provider_items
+            .iter()
+            .position(|s| {
+                let id = s.split(" — ").next().unwrap_or(s).trim();
+                id.eq_ignore_ascii_case(&app.provider)
+            })
+            .unwrap_or(0);
+        app.provider_selector = true;
+    }
+}
+
+/// Open the model selector popup with local models + all available models for the active cloud provider.
+fn open_model_selector(app: &mut App, state: &Arc<Mutex<AgentState>>) {
+    let st = state.lock().unwrap();
+    let local = crate::llm::model_resolver::list_models(&st.config.models_dir);
+    let dir = st.config.models_dir.clone();
+    drop(st);
+
+    let provider = app.provider.clone();
+    let catalog = crate::providers::ModelsDevClient::load();
+    let mut prov_models = catalog.provider_models(&provider);
+
+    let cloud_items: Vec<String> = if provider == "nvidia" {
+        let mut cloud_ranked: Vec<(usize, String)> = prov_models
+            .into_iter()
+            .filter(|m| m.modalities.output.is_empty() || m.modalities.output.iter().any(|o| o == "text"))
+            .map(|m| {
+                let base = crate::providers::base_id(&m.id);
+                let display = ranked_model_name(&base);
+                (ranked_model_order(&base), display)
+            })
+            .collect();
+        cloud_ranked.sort_by_key(|(rank, _)| *rank);
+        cloud_ranked
+            .into_iter()
+            .map(|(_, name)| format!("{} [cloud]", name))
+            .collect()
+    } else {
+        // For all other cloud providers: sort tool-capable on top, then by name
+        prov_models.sort_by(|a, b| {
+            b.tool_call
+                .cmp(&a.tool_call)
+                .then_with(|| a.id.to_lowercase().cmp(&b.id.to_lowercase()))
+        });
+        prov_models
+            .into_iter()
+            .filter(|m| m.modalities.output.is_empty() || m.modalities.output.iter().any(|o| o == "text"))
+            .map(|m| {
+                let tool_tag = if m.tool_call { "" } else { " (no-tools)" };
+                format!("{}{} [cloud]", m.id, tool_tag)
+            })
+            .collect()
+    };
+
+    let mut items: Vec<String> = local.clone();
+    if provider == "nvidia" {
+        items.push("auto".into());
+    }
+    items.extend(unique_model_ids(cloud_items));
+    items.dedup();
+
+    if items.is_empty() {
+        app.add_message(
+            "System",
+            &format!(
+                "No catalog models found for provider '{}' in {}. Use /model <name> to set model ID directly.",
+                provider,
+                dir.display()
+            ),
+        );
+        app.status =
+            "Ready · Enter to send · ↑/↓ history · PgUp/PgDn scroll · mouse wheel · Esc interrupt".into();
+    } else {
+        app.model_items = items;
+        app.model_selected = app
+            .model_items
+            .iter()
+            .position(|m| {
+                let trimmed = m
+                    .trim_end_matches(" [cloud]")
+                    .trim_end_matches(" (no-tools)")
+                    .trim();
+                trimmed.eq_ignore_ascii_case(&app.model)
+            })
+            .unwrap_or(0);
+        app.model_selector = true;
+    }
+}
+
 fn pinned_candidate_models(provider: &str, state: &Arc<Mutex<AgentState>>) -> Vec<String> {
     let catalog = crate::providers::ModelsDevClient::load();
     let cloud_candidates: Vec<String> = catalog
         .provider_models(provider)
         .into_iter()
-        .filter(|m| m.tool_call && m.modalities.output.iter().any(|o| o == "text"))
+        .filter(|m| m.modalities.output.is_empty() || m.modalities.output.iter().any(|o| o == "text"))
         .filter(|m| {
-            let base = crate::providers::base_id(&m.id);
-            matches!(
-                base.as_str(),
-                "glm-5.2"
-                    | "qwen3.5-397b-a17b"
-                    | "deepseek-v4-pro"
-                    | "kimi-k2.6"
-                    | "minimax-m3"
-                    | "nemotron-3-ultra-550b-a55b"
-            )
+            if provider == "nvidia" {
+                let base = crate::providers::base_id(&m.id);
+                matches!(
+                    base.as_str(),
+                    "glm-5.2"
+                        | "qwen3.5-397b-a17b"
+                        | "deepseek-v4-pro"
+                        | "kimi-k2.6"
+                        | "minimax-m3"
+                        | "nemotron-3-ultra-550b-a55b"
+                )
+            } else {
+                m.tool_call
+            }
         })
         .map(|m| crate::providers::base_id(&m.id))
         .collect();
@@ -1059,7 +1221,11 @@ fn set_active_model(
     name: &str,
     auto_test_tx: Option<&mpsc::Sender<AutoTestProbeEvent>>,
 ) {
-    let clean = name.trim_end_matches(" [cloud]").to_string();
+    let clean = name
+        .trim_end_matches(" [cloud]")
+        .trim_end_matches(" (no-tools)")
+        .trim()
+        .to_string();
     let is_force_test =
         clean.contains("test") || clean.contains("refresh") || clean.contains("probe");
     let is_auto_cmd = clean == "auto" || clean.starts_with("auto");
@@ -1660,12 +1826,48 @@ pub fn run_ui(client: LlmRouter, state: AgentState) -> Result<(), Box<dyn Error>
                     guard.command_menu = false;
                     guard.model_selector = false;
                     guard.provider_selector = false;
+                    guard.key_input_popup = false;
+                    guard.key_input_value.clear();
                     guard.resume_selector = false;
                     guard.pending_approval = None;
                     guard.status = "Press Ctrl+C again to quit".into();
                     continue;
                 } else {
                     guard.quit_pending = false;
+                }
+
+                // Key input modal captures typing for configuring API keys
+                if guard.key_input_popup {
+                    match key.code {
+                        KeyCode::Char(c) => {
+                            guard.key_input_value.push(c);
+                        }
+                        KeyCode::Backspace => {
+                            guard.key_input_value.pop();
+                        }
+                        KeyCode::Enter => {
+                            let key_val = guard.key_input_value.trim().to_string();
+                            let prov = guard.key_input_provider.clone();
+                            guard.key_input_popup = false;
+                            guard.key_input_value.clear();
+                            if !key_val.is_empty() {
+                                if let Err(e) = save_provider_key(&prov, &key_val) {
+                                    guard.add_message("Error", &format!("Failed to save key: {e}"));
+                                } else {
+                                    guard.add_message("System", &format!("✓ API key saved for '{prov}'"));
+                                    set_active_provider(&mut guard, &state, &client, &prov);
+                                    open_model_selector(&mut guard, &state);
+                                }
+                            }
+                        }
+                        KeyCode::Esc => {
+                            guard.key_input_popup = false;
+                            guard.key_input_value.clear();
+                            guard.status = "API key configuration cancelled.".into();
+                        }
+                        _ => {}
+                    }
+                    continue;
                 }
 
                 // The approval modal only captures explicit decisions.
@@ -1885,8 +2087,20 @@ pub fn run_ui(client: LlmRouter, state: AgentState) -> Result<(), Box<dyn Error>
                                     .unwrap_or_default();
                                 guard.provider_selector = false;
                                 if !name.is_empty() {
-                                    let id = name.split(" — ").next().unwrap_or(&name).to_string();
-                                    set_active_provider(&mut guard, &state, &client, &id);
+                                    let id = name.split(" — ").next().unwrap_or(&name).trim().to_string();
+                                    let store = crate::providers::ProviderStore::load();
+                                    let catalog_client = crate::providers::ModelsDevClient::load();
+                                    let has_key = store.api_key(&id).is_some()
+                                        || crate::providers::ProviderStore::resolve_cloud_credentials(&id, &catalog_client.catalog).is_ok();
+                                    if has_key {
+                                        set_active_provider(&mut guard, &state, &client, &id);
+                                        open_model_selector(&mut guard, &state);
+                                    } else {
+                                        guard.key_input_provider = id.clone();
+                                        guard.key_input_value = String::new();
+                                        guard.key_input_popup = true;
+                                        guard.status = format!("Enter API key for {id} (Enter to confirm, Esc to cancel)");
+                                    }
                                 }
                             } else if guard.resume_selector {
                                 if let Some(&session_id) =
@@ -2631,20 +2845,22 @@ fn draw<B: ratatui::backend::Backend>(
                     .provider_items
                     .iter()
                     .map(|p| {
-                        ListItem::new(Span::styled(
-                            p.clone(),
-                            Style::default().fg(Color::LightBlue),
-                        ))
+                        let style = if p.contains("[key set]") {
+                            Style::default().fg(Color::Green)
+                        } else {
+                            Style::default().fg(Color::LightBlue)
+                        };
+                        ListItem::new(Span::styled(p.clone(), style))
                     })
                     .collect::<Vec<_>>();
                 let selected = app.provider_selected.min(items.len().saturating_sub(1));
                 (
                     items,
-                    " Select provider — ↑/↓ · Enter set · Esc cancel ".to_string(),
+                    " Select provider — ↑/↓ · Enter set & choose model · Esc cancel ".to_string(),
                     selected,
                 )
             };
-            let popup_w = 64.min(size.width.saturating_sub(4));
+            let popup_w = 76.min(size.width.saturating_sub(4));
             let popup_h = (items.len() as u16 + 2).min(size.height.saturating_sub(4));
             let x = size.x + (size.width.saturating_sub(popup_w)) / 2;
             let y = size.y + (size.height.saturating_sub(popup_h)) / 3;
@@ -2654,6 +2870,7 @@ fn draw<B: ratatui::backend::Backend>(
                 width: popup_w,
                 height: popup_h,
             };
+            f.render_widget(Clear, area);
             let mut list_state = ratatui::widgets::ListState::default();
             list_state.select(Some(selected));
             let list = List::new(items)
@@ -2909,6 +3126,54 @@ fn draw<B: ratatui::backend::Backend>(
                 )
                 .wrap(Wrap { trim: true });
             f.render_widget(paragraph, area);
+        }
+
+        // Key input modal
+        if app.key_input_popup {
+            let popup_w = 72.min(size.width.saturating_sub(4));
+            let popup_h = 7.min(size.height.saturating_sub(4));
+            let area = Rect {
+                x: size.x + (size.width.saturating_sub(popup_w)) / 2,
+                y: size.y + (size.height.saturating_sub(popup_h)) / 3,
+                width: popup_w,
+                height: popup_h,
+            };
+            f.render_widget(Clear, area);
+
+            let masked = if app.key_input_value.len() <= 6 {
+                "*".repeat(app.key_input_value.len())
+            } else {
+                let tail = &app.key_input_value[app.key_input_value.len() - 4..];
+                format!("{}...{}", "*".repeat(app.key_input_value.len() - 4), tail)
+            };
+
+            let lines = vec![
+                Line::from(vec![
+                    Span::styled(
+                        format!("Provedor: {}", app.key_input_provider),
+                        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                    ),
+                ]),
+                Line::from(vec![
+                    Span::styled("API Key: ", Style::default().fg(Color::Yellow)),
+                    Span::styled(
+                        if app.key_input_value.is_empty() { "<digite ou cole a API key>" } else { &masked },
+                        if app.key_input_value.is_empty() { Style::default().fg(Color::DarkGray) } else { Style::default().fg(Color::White).add_modifier(Modifier::BOLD) },
+                    ),
+                ]),
+                Line::from(Span::styled(
+                    "Enter salvar & escolher modelo · Esc cancelar",
+                    Style::default().fg(Color::Gray),
+                )),
+            ];
+
+            let block = Block::default()
+                .title(format!(" Configurar API Key: {} ", app.key_input_provider))
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Yellow));
+
+            let para = Paragraph::new(lines).block(block);
+            f.render_widget(para, area);
         }
     })?;
     Ok(())
@@ -3739,8 +4004,10 @@ mod tests {
     }
 
     fn test_app_state_router() -> (App, Arc<Mutex<AgentState>>, LlmRouter) {
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let id = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let mut cfg = crate::config::settings::Config::default();
-        let base = std::env::temp_dir().join(format!("anamnesic-ui-{}", std::process::id()));
+        let base = std::env::temp_dir().join(format!("anamnesic-ui-{}-{}", std::process::id(), id));
         cfg.workspace_dir = base.join("workspace");
         cfg.memory_dir = base.join("memory");
         let state = Arc::new(Mutex::new(
@@ -4299,4 +4566,33 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn open_provider_selector_populates_items_with_key_status() {
+        let (mut app, _state, _router) = test_app_state_router();
+        open_provider_selector(&mut app, "");
+        assert!(app.provider_selector);
+        assert!(!app.provider_items.is_empty());
+        assert!(app.provider_items.iter().any(|p| p.contains("[key set]") || p.contains("[no key]")));
+    }
+
+    #[test]
+    fn open_model_selector_loads_models_for_provider() {
+        let (mut app, state, _router) = test_app_state_router();
+        app.provider = "openrouter".into();
+        open_model_selector(&mut app, &state);
+        assert!(app.model_selector);
+        assert!(!app.model_items.is_empty());
+        assert!(app.model_items.iter().any(|m| m.contains("[cloud]")));
+    }
+
+    #[test]
+    fn save_provider_key_persists_to_store_and_env() {
+        let res = save_provider_key("testprov", "sk-test-12345678");
+        assert!(res.is_ok());
+        let store = crate::providers::ProviderStore::load();
+        assert_eq!(store.api_key("testprov"), Some("sk-test-12345678"));
+        assert_eq!(std::env::var("TESTPROV_API_KEY").ok(), Some("sk-test-12345678".to_string()));
+    }
 }
+
