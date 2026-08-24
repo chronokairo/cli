@@ -380,7 +380,11 @@ impl App {
     }
 
     pub fn add_message(&mut self, role: &str, content: &str) {
-        self.messages.push((role.to_string(), content.to_string()));
+        let clean = strip_ansi_and_controls(content);
+        if clean.trim().is_empty() && role.eq_ignore_ascii_case("assistant") {
+            return;
+        }
+        self.messages.push((role.to_string(), clean));
     }
 
     pub fn feed_tool_delta(&mut self, index: usize, name: &str, args_delta: &str) {
@@ -2520,7 +2524,7 @@ pub fn run_ui(client: LlmRouter, state: AgentState) -> Result<(), Box<dyn Error>
                     MouseEventKind::Down(MouseButton::Left) => {
                         // Toggle tool call rollup expansion on click.
                         let flattened = flatten_messages(&guard);
-                        let msg_area_top = 2; // margin(1) + header(1)
+                        let msg_area_top = 1; // header(1)
                         let clicked_row = mouse.row as usize;
                         if clicked_row > msg_area_top {
                             let offset = if guard.follow {
@@ -2700,7 +2704,6 @@ fn draw<B: ratatui::backend::Backend>(
         let size = f.area();
         let page = Layout::default()
             .direction(Direction::Vertical)
-            .margin(1)
             .constraints(
                 [
                     Constraint::Length(1),
@@ -3571,6 +3574,9 @@ fn user_message_lines(content: &str) -> Vec<Line<'static>> {
 /// Codex-style assistant cell: markdown rendered, first line prefixed with
 /// `• ` (dim), continuation lines with two spaces.
 fn assistant_message_lines(content: &str) -> Vec<Line<'static>> {
+    if content.trim().is_empty() {
+        return Vec::new();
+    }
     let raw_spans = match render_markdown_lines(content) {
         Some(spans) => spans,
         None => vec![Span::styled(
@@ -3757,16 +3763,21 @@ fn status_message_lines(role: &str, content: &str) -> Vec<Line<'static>> {
         }
         _ => ("", Style::default(), Style::default().fg(Color::Gray), false),
     };
+    let clean = strip_ansi_and_controls(content);
     let mut out = Vec::new();
     let mut first = true;
-    for content_line in content.lines() {
+    for content_line in clean.lines() {
+        if content_line.trim().is_empty() {
+            continue;
+        }
         let mut spans = Vec::new();
         if first {
             if !prefix.is_empty() {
                 spans.push(Span::styled(prefix, prefix_style));
             }
         } else {
-            spans.push(Span::styled("  ", Style::default()));
+            let indent = " ".repeat(display_width(prefix));
+            spans.push(Span::styled(indent, Style::default()));
         }
         first = false;
         let style = if italic {
@@ -3777,8 +3788,8 @@ fn status_message_lines(role: &str, content: &str) -> Vec<Line<'static>> {
         spans.push(Span::styled(content_line.to_string(), style));
         out.push(Line::from(spans));
     }
-    if first {
-        out.push(Line::from(""));
+    if first && !prefix.is_empty() {
+        out.push(Line::from(vec![Span::styled(prefix, prefix_style)]));
     }
     out
 }
@@ -4005,6 +4016,55 @@ fn truncate_str(s: &str, max: usize) -> String {
     out
 }
 
+/// Strip ANSI escape codes and control characters (\r, cursor jumps, color codes)
+/// from tool output or text before passing into Ratatui spans.
+/// Prevents terminal corruption on Windows Terminal / crossterm.
+pub fn strip_ansi_and_controls(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            if let Some(&'[') = chars.peek() {
+                chars.next();
+                while let Some(&next) = chars.peek() {
+                    chars.next();
+                    if next.is_ascii_alphabetic() || next == '~' || next == '@' {
+                        break;
+                    }
+                }
+            } else if let Some(&']') = chars.peek() {
+                chars.next();
+                while let Some(next) = chars.next() {
+                    if next == '\x07' || (next == '\x1b' && chars.peek() == Some(&'\\')) {
+                        if next == '\x1b' {
+                            chars.next();
+                        }
+                        break;
+                    }
+                }
+            } else if let Some(&'(') | Some(&')') = chars.peek() {
+                chars.next();
+                let _ = chars.next();
+            }
+            continue;
+        }
+        if c == '\r' {
+            if chars.peek() != Some(&'\n') {
+                out.push('\n');
+            }
+            continue;
+        }
+        if c == '\t' {
+            out.push_str("    ");
+            continue;
+        }
+        if c == '\n' || !c.is_control() {
+            out.push(c);
+        }
+    }
+    out
+}
+
 /// Collapse a status message to a single display line: newlines/carriage
 /// returns become spaces and repeated whitespace is squeezed, so the fixed
 /// status row can never render as stacked lines (e.g. fallback error chains).
@@ -4116,6 +4176,14 @@ mod tests {
         assert_eq!(sanitize_status("a\tb"), "a b");
         assert_eq!(sanitize_status("a\n\nb"), "a b");
         assert_eq!(sanitize_status(" a b "), " a b ");
+    }
+
+    #[test]
+    fn strip_ansi_and_controls_removes_vt100_escapes_and_crs() {
+        assert_eq!(strip_ansi_and_controls("\x1b[32m✓ pass\x1b[0m"), "✓ pass");
+        assert_eq!(strip_ansi_and_controls("\x1b[1A\x1b[2Kprogress\r\ndone"), "progress\ndone");
+        assert_eq!(strip_ansi_and_controls("col1\tcol2"), "col1    col2");
+        assert_eq!(strip_ansi_and_controls("line\rline"), "line\nline");
     }
 
     #[test]
