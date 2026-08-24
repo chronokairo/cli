@@ -2326,6 +2326,19 @@ fn route_turn(client: &LlmRouter, state: &AgentState, task: &str, hooks: &AgentH
         return state.config.coder_model.clone();
     }
     if decision.selected_model != state.config.coder_model {
+        // If decision selected a local model, verify it actually resolves locally before attempting
+        #[cfg(not(test))]
+        if !decision.is_remote() && !client.is_cloud_model(&decision.selected_model) {
+            let models_dir = &state.config.models_dir;
+            if crate::llm::model_resolver::resolve_model(&decision.selected_model, models_dir).is_err() {
+                // Local model not found on system; fallback to configured coder model
+                hooks.note(&format!(
+                    "  [routing] local model '{}' not found; using configured model '{}'",
+                    decision.selected_model, state.config.coder_model
+                ));
+                return state.config.coder_model.clone();
+            }
+        }
         hooks.emit(AgentEvent::Routing {
             summary: decision.summary(),
         });

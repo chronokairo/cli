@@ -822,6 +822,65 @@ fn ranked_model_order(base_id: &str) -> usize {
     }
 }
 
+/// Clean and shorten a file/folder path for display in TUI headers and footers.
+/// Strips Windows verbatim prefixes (`\\?\`), normalizes directory separators,
+/// replaces user home directory with `~`, and shortens with `…/` if needed.
+pub fn clean_display_path(path: &str, max_width: usize) -> String {
+    if path.is_empty() {
+        return String::new();
+    }
+    let mut s = path.trim();
+    // Strip Windows verbatim / extended-length path prefix \\?\ and \\?\UNC\
+    if let Some(stripped) = s.strip_prefix(r"\\?\UNC\") {
+        s = stripped;
+    } else if let Some(stripped) = s.strip_prefix(r"\\?\") {
+        s = stripped;
+    } else if let Some(stripped) = s.strip_prefix(r"\??\") {
+        s = stripped;
+    }
+
+    let mut path_str = s.to_string();
+
+    // Replace user home with ~
+    if let Some(home) = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")) {
+        let home_str = home.to_string_lossy().to_string();
+        let clean_home = home_str.trim_start_matches(r"\\?\").trim_end_matches(['/', '\\']);
+        if !clean_home.is_empty() {
+            #[cfg(windows)]
+            let starts = path_str.to_lowercase().starts_with(&clean_home.to_lowercase());
+            #[cfg(not(windows))]
+            let starts = path_str.starts_with(clean_home);
+
+            if starts {
+                let tail = &path_str[clean_home.len()..];
+                let tail = tail.trim_start_matches(['/', '\\']);
+                if tail.is_empty() {
+                    path_str = "~".to_string();
+                } else {
+                    path_str = format!("~/{tail}");
+                }
+            }
+        }
+    }
+
+    // Convert backslashes to forward slashes for clean modern UI look
+    path_str = path_str.replace('\\', "/");
+
+    if max_width > 0 && display_width(&path_str) > max_width {
+        let parts: Vec<&str> = path_str.split('/').collect();
+        if parts.len() > 2 {
+            let tail = parts[parts.len().saturating_sub(2)..].join("/");
+            let shortened = format!("…/{tail}");
+            if display_width(&shortened) <= max_width {
+                return shortened;
+            }
+        }
+        truncate_str(&path_str, max_width)
+    } else {
+        path_str
+    }
+}
+
 /// Safely execute an async future synchronously without panicking if already inside a Tokio runtime.
 fn block_on_async<F: std::future::Future>(fut: F) -> F::Output {
     if let Ok(handle) = tokio::runtime::Handle::try_current() {
@@ -2645,22 +2704,25 @@ fn draw<B: ratatui::backend::Backend>(
                 .as_ref(),
             )
             .split(size);
-        // Compact single-line header (modern harness style): title badge + context,
-        // token counter right-aligned. No box — full-bleed like Claude Code/Codex.
-        let header_w = size.width.saturating_sub(2) as usize;
-        let left_txt = format!(
-            "  {}  ·  {}  ·  {}  ·  {}",
-            truncate_str(&app.model, 22),
-            truncate_str(&app.provider, 12),
-            app.git_branch,
-            match app.agent_mode {
-                AgentMode::Agent => "agent",
-                AgentMode::Plan => "plan",
-            },
-        );
-        let right_txt = format!("ctx: {} tok ", app.tokens);
-        let pad = header_w.saturating_sub(left_txt.chars().count() + right_txt.chars().count());
-        let header = Paragraph::new(Line::from(vec![
+        // Compact single-line header (modern 2026 harness style):
+        // [ANAMNESIC] ⟡ model · provider · ⎇ branch · mode        ctx: 1.2k / 128k · $0.002
+        let avail_w = page[0].width as usize;
+        let model_tag = if app.auto_model {
+            format!("auto:{}", truncate_str(&app.model, 16))
+        } else {
+            truncate_str(&app.model, 20)
+        };
+        let branch_tag = if app.git_branch == "no git" || app.git_branch.is_empty() {
+            String::new()
+        } else {
+            format!("⎇ {}", app.git_branch)
+        };
+        let mode_tag = match app.agent_mode {
+            AgentMode::Agent => "⚡ agent",
+            AgentMode::Plan => "📋 plan",
+        };
+
+        let mut left_spans = vec![
             Span::styled(
                 " ANAMNESIC ",
                 Style::default()
@@ -2668,73 +2730,139 @@ fn draw<B: ratatui::backend::Backend>(
                     .bg(Color::Cyan)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(left_txt, Style::default().fg(Color::Gray)),
-            Span::styled(" ".repeat(pad), Style::default()),
-            Span::styled(right_txt, Style::default().fg(Color::Gray)),
-        ]));
+            Span::styled(format!(" ⟡ {model_tag}"), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+            Span::styled(format!(" · {}", truncate_str(&app.provider, 12)), Style::default().fg(Color::Cyan)),
+        ];
+        if !branch_tag.is_empty() {
+            left_spans.push(Span::styled(format!(" · {branch_tag}"), Style::default().fg(Color::LightGreen)));
+        }
+        left_spans.push(Span::styled(format!(" · {mode_tag}"), Style::default().fg(Color::LightYellow)));
+
+        let left_w: usize = left_spans.iter().map(|s| display_width(s.content.as_ref())).sum();
+
+        let max_ctx = if app.max_context_tokens > 0 {
+            format!("{:.0}k", app.max_context_tokens as f64 / 1000.0)
+        } else {
+            "128k".to_string()
+        };
+        let tok_str = if app.tokens >= 1000 {
+            format!("{:.1}k", app.tokens as f64 / 1000.0)
+        } else {
+            format!("{}", app.tokens)
+        };
+        let cost_str = if app.context_cost > 0.0001 {
+            format!(" · ${:.4}", app.context_cost)
+        } else {
+            String::new()
+        };
+        let right_txt = format!("ctx: {tok_str} / {max_ctx}{cost_str} ");
+        let right_w = display_width(&right_txt);
+
+        let pad = avail_w.saturating_sub(left_w + right_w);
+        left_spans.push(Span::styled(" ".repeat(pad), Style::default()));
+        left_spans.push(Span::styled(right_txt, Style::default().fg(Color::Gray)));
+
+        let header = Paragraph::new(Line::from(left_spans));
         f.render_widget(header, page[0]);
-        // Fixed status line: shows current status text (warnings, planning, retries)
-        // truncated to terminal width. Never wraps — keeps layout stable.
-        let status_w = size.width as usize;
-        let status_text = truncate_str(&sanitize_status(&app.status), status_w.saturating_sub(2));
-        let status_line = Paragraph::new(Line::from(vec![Span::styled(
-            format!(" {} ", status_text),
-            Style::default().fg(Color::Yellow),
-        )]));
+
+        // Fixed status line: shows animated spinner during execution or concise feedback
+        let status_w = page[2].width as usize;
+        let (status_icon, status_style) = if app.loading {
+            (
+                format!(" {} ", SPINNER[app.spinner_frame]),
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            )
+        } else if app.status.starts_with("Failed") || app.status.starts_with("Error") || app.status.starts_with('✗') {
+            (
+                " ✗ ".to_string(),
+                Style::default().fg(Color::LightRed).add_modifier(Modifier::BOLD),
+            )
+        } else if app.pending_approval.is_some() || app.pending_plan_approval.is_some() {
+            (
+                " ⚠ ".to_string(),
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            )
+        } else {
+            (
+                " ℹ ".to_string(),
+                Style::default().fg(Color::DarkGray),
+            )
+        };
+
+        let raw_status = sanitize_status(&app.status);
+        let max_text_w = status_w.saturating_sub(display_width(&status_icon) + 2);
+        let clean_status = truncate_str(&raw_status, max_text_w);
+        let status_line = Paragraph::new(Line::from(vec![
+            Span::styled(status_icon, status_style),
+            Span::styled(clean_status, if app.loading { Style::default().fg(Color::Cyan) } else { Style::default().fg(Color::Gray) }),
+        ]));
         f.render_widget(status_line, page[2]);
-        // Input bar: bare prompt at the bottom (modern harness style, no box).
-        let prompt = if app.loading { "▍" } else { "❯" };
-        let input_line = Line::from(vec![
-            Span::styled(
-                format!("{prompt} "),
-                Style::default()
-                    .fg(if app.loading {
-                        Color::Gray
-                    } else {
-                        Color::Green
-                    })
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(
-                app.input.clone(),
-                Style::default().fg(if app.loading {
-                    Color::Gray
-                } else {
-                    Color::White
-                }),
-            ),
-        ]);
-        let input = Paragraph::new(input_line).wrap(Wrap { trim: true });
+
+        // Modern Prompt Input Bar
+        let prompt_symbol = if app.loading { "▍" } else { "❯" };
+        let prompt_style = if app.loading {
+            Style::default().fg(Color::Gray)
+        } else {
+            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+        };
+
+        let input_spans = if app.input.is_empty() && !app.loading {
+            vec![
+                Span::styled(format!("{prompt_symbol} "), prompt_style),
+                Span::styled(
+                    "Ask a question, describe a change, or type / for commands...",
+                    Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+                ),
+            ]
+        } else {
+            vec![
+                Span::styled(format!("{prompt_symbol} "), prompt_style),
+                Span::styled(
+                    app.input.clone(),
+                    Style::default().fg(if app.loading { Color::Gray } else { Color::White }),
+                ),
+            ]
+        };
+
+        let input = Paragraph::new(Line::from(input_spans)).wrap(Wrap { trim: true });
         f.render_widget(input, page[3]);
+
         // Set cursor position next to the typed text.
         if !app.loading {
-            f.set_cursor_position((page[3].x + 2 + app.cursor_position as u16, page[3].y));
+            let cursor_x = page[3].x + 2 + app.cursor_position as u16;
+            f.set_cursor_position((cursor_x.min(page[3].x + page[3].width.saturating_sub(1)), page[3].y));
         }
-        // Thin bottom bar: dir · branch on the left, spinner + elapsed on the right.
-        let bottom_left = format!(" {} · {}", truncate_str(&app.dir, 48), app.git_branch);
-        let bottom_right = if app.loading {
+
+        // Modern bottom shortcut / info bar
+        let avail_footer_w = page[4].width as usize;
+        let clean_dir = clean_display_path(&app.dir, 36);
+        let footer_left = if app.git_branch == "no git" || app.git_branch.is_empty() {
+            format!(" {clean_dir}")
+        } else {
+            format!(" ⎇ {} · {clean_dir}", app.git_branch)
+        };
+
+        let footer_right = if app.loading {
             format!(
-                " {} {:<5}  (Ctrl+C cancel) ",
-                SPINNER[app.spinner_frame],
+                "{} (Ctrl+C cancel) ",
                 format_elapsed(app.elapsed)
             )
         } else if app.pending_approval.is_some() {
-            " a: allow once · s: allow session · d: deny ".into()
+            "a: allow once · s: allow session · d/Esc: deny ".into()
+        } else if app.pending_plan_approval.is_some() {
+            "a/s: approve plan · d/Esc: deny ".into()
         } else {
-            " Esc interrupt · Ctrl+O tool calls · Ctrl+E tool calls · Ctrl+R view ".into()
+            "Esc interrupt · / commands · Ctrl+P files · Ctrl+O tools · Ctrl+L clear ".into()
         };
-        let bottom_pad = (size.width as usize)
-            .saturating_sub(bottom_left.chars().count() + bottom_right.chars().count());
+
+        let f_left_w = display_width(&footer_left);
+        let f_right_w = display_width(&footer_right);
+        let f_pad = avail_footer_w.saturating_sub(f_left_w + f_right_w);
+
         let bottom = Paragraph::new(Line::from(vec![
-            Span::styled(
-                bottom_left,
-                Style::default().fg(Color::Gray),
-            ),
-            Span::styled(" ".repeat(bottom_pad), Style::default()),
-            Span::styled(
-                bottom_right,
-                Style::default().fg(Color::Gray),
-            ),
+            Span::styled(footer_left, Style::default().fg(Color::DarkGray)),
+            Span::styled(" ".repeat(f_pad), Style::default()),
+            Span::styled(footer_right, Style::default().fg(Color::DarkGray)),
         ]));
         f.render_widget(bottom, page[4]);
 
@@ -3457,17 +3585,23 @@ fn status_message_lines(role: &str, content: &str) -> Vec<Line<'static>> {
     let (prefix, prefix_style, content_style, italic) = match lower.as_str() {
         "error" => (
             "✗ ",
-            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-            Style::default().fg(Color::Red),
+            Style::default().fg(Color::LightRed).add_modifier(Modifier::BOLD),
+            Style::default().fg(Color::LightRed),
             false,
         ),
         "plan" => (
-            "⏺ ",
+            "📋 ",
             Style::default()
                 .fg(Color::LightMagenta)
                 .add_modifier(Modifier::BOLD),
             Style::default().fg(Color::LightMagenta),
             false,
+        ),
+        "thinking" => (
+            "💭 ",
+            Style::default().fg(Color::DarkGray),
+            Style::default().fg(Color::DarkGray),
+            true,
         ),
         "tool" => {
             let is_active = content.starts_with('Δ');
@@ -3489,6 +3623,7 @@ fn status_message_lines(role: &str, content: &str) -> Vec<Line<'static>> {
             } else if content.contains("run")
                 || content.contains("exec")
                 || content.contains("cargo")
+                || content.contains("command")
             {
                 "⚡ "
             } else if content.contains("verify") || content.contains("test") {
@@ -3496,14 +3631,14 @@ fn status_message_lines(role: &str, content: &str) -> Vec<Line<'static>> {
             } else if is_active {
                 "⏳ "
             } else {
-                "↳ "
+                "⚡ "
             };
             let prefix_style = if is_active {
                 Style::default()
                     .fg(Color::Cyan)
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(Color::Gray)
+                Style::default().fg(Color::LightCyan)
             };
             let content_style = if is_active {
                 Style::default().fg(Color::Cyan)
@@ -3519,8 +3654,8 @@ fn status_message_lines(role: &str, content: &str) -> Vec<Line<'static>> {
             false,
         ),
         "verify" => (
-            "",
-            Style::default(),
+            "🧪 ",
+            Style::default().fg(Color::LightYellow),
             Style::default().fg(Color::Gray),
             false,
         ),
@@ -3531,18 +3666,36 @@ fn status_message_lines(role: &str, content: &str) -> Vec<Line<'static>> {
             false,
         ),
         "approval" => (
-            "",
-            Style::default(),
+            "✓ ",
+            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
             Style::default().fg(Color::Green),
             false,
         ),
-        "info" => (
-            "",
-            Style::default(),
-            Style::default().fg(Color::Cyan),
-            false,
-        ),
-        _ => ("", Style::default(), Style::default().fg(Color::Gray), true),
+        "info" | "system" => {
+            if content.starts_with('✓') {
+                (
+                    "",
+                    Style::default().fg(Color::Green),
+                    Style::default().fg(Color::Green),
+                    false,
+                )
+            } else if content.starts_with('✗') {
+                (
+                    "",
+                    Style::default().fg(Color::LightRed),
+                    Style::default().fg(Color::LightRed),
+                    false,
+                )
+            } else {
+                (
+                    "",
+                    Style::default(),
+                    Style::default().fg(Color::Gray),
+                    false,
+                )
+            }
+        }
+        _ => ("", Style::default(), Style::default().fg(Color::Gray), false),
     };
     let mut out = Vec::new();
     let mut first = true;
@@ -4593,6 +4746,22 @@ mod tests {
         let store = crate::providers::ProviderStore::load();
         assert_eq!(store.api_key("testprov"), Some("sk-test-12345678"));
         assert_eq!(std::env::var("TESTPROV_API_KEY").ok(), Some("sk-test-12345678".to_string()));
+    }
+
+    #[test]
+    fn clean_display_path_strips_unc_and_normalizes() {
+        assert_eq!(clean_display_path(r"\\?\C:\Projects\app", 50), "C:/Projects/app");
+        assert_eq!(clean_display_path(r"\\?\UNC\server\share\file", 50), "server/share/file");
+        assert_eq!(clean_display_path("/usr/local/bin/app", 50), "/usr/local/bin/app");
+    }
+
+    #[test]
+    fn clean_display_path_truncates_long_paths() {
+        let path = "C:/Users/user/very/deeply/nested/directory/structure/myproject";
+        let cleaned = clean_display_path(path, 25);
+        assert!(cleaned.starts_with("…/"));
+        assert!(cleaned.ends_with("myproject"));
+        assert!(display_width(&cleaned) <= 25);
     }
 }
 

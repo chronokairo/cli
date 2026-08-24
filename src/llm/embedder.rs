@@ -169,38 +169,54 @@ fn download_to(client: &reqwest::blocking::Client, url: &str, target: &Path) -> 
 mod tests {
     use super::*;
 
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn resolve_source_uses_global_models_dir() {
+        let _guard = ENV_LOCK.lock().unwrap();
         let tmp =
             std::env::temp_dir().join(format!("anamnesic-embedder-global-{}", std::process::id()));
         let dir = tmp.join(".anamnesic").join("models").join("embeddings");
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("my-embed.gguf");
         std::fs::write(&file, b"not a real model").unwrap();
-        let prev = std::env::var_os("HOME");
+        let prev_home = std::env::var_os("HOME");
+        let prev_up = std::env::var_os("USERPROFILE");
         std::env::set_var("HOME", &tmp);
+        std::env::set_var("USERPROFILE", &tmp);
         let found = resolve_source();
         assert_eq!(found, Some(file));
         assert!(Embedder::new().is_available());
-        match prev {
+        match prev_home {
             Some(v) => std::env::set_var("HOME", v),
             None => std::env::remove_var("HOME"),
+        }
+        match prev_up {
+            Some(v) => std::env::set_var("USERPROFILE", v),
+            None => std::env::remove_var("USERPROFILE"),
         }
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
     fn resolve_source_returns_none_when_missing() {
+        let _guard = ENV_LOCK.lock().unwrap();
         let tmp =
             std::env::temp_dir().join(format!("anamnesic-embedder-none-{}", std::process::id()));
-        let prev = std::env::var_os("HOME");
+        let prev_home = std::env::var_os("HOME");
+        let prev_up = std::env::var_os("USERPROFILE");
         std::env::set_var("HOME", &tmp);
+        std::env::set_var("USERPROFILE", &tmp);
         std::fs::create_dir_all(&tmp).unwrap();
         assert!(resolve_source().is_none());
         assert!(!Embedder::new().is_available());
-        match prev {
+        match prev_home {
             Some(v) => std::env::set_var("HOME", v),
             None => std::env::remove_var("HOME"),
+        }
+        match prev_up {
+            Some(v) => std::env::set_var("USERPROFILE", v),
+            None => std::env::remove_var("USERPROFILE"),
         }
         let _ = std::fs::remove_dir_all(&tmp);
     }
