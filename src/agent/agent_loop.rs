@@ -2313,39 +2313,6 @@ pub async fn run_agent_loop_with_hooks(
     }
 }
 
-/// Route the current turn when the task router is enabled, falling back to
-/// the configured coder model when routing is off or cannot pick a model.
-/// Returns the model name to drive the turn with.
-fn route_turn(client: &LlmRouter, state: &AgentState, task: &str, hooks: &AgentHooks) -> String {
-    if !state.config.routing.enabled {
-        return state.config.coder_model.clone();
-    }
-    let decision = crate::llm::routing::route_agent_turn(client, state, task);
-    if let Some(error) = &decision.error {
-        hooks.note(&format!("  [routing] {error}; using configured model"));
-        return state.config.coder_model.clone();
-    }
-    if decision.selected_model != state.config.coder_model {
-        // If decision selected a local model, verify it actually resolves locally before attempting
-        #[cfg(not(test))]
-        if !decision.is_remote() && !client.is_cloud_model(&decision.selected_model) {
-            let models_dir = &state.config.models_dir;
-            if crate::llm::model_resolver::resolve_model(&decision.selected_model, models_dir).is_err() {
-                // Local model not found on system; fallback to configured coder model
-                hooks.note(&format!(
-                    "  [routing] local model '{}' not found; using configured model '{}'",
-                    decision.selected_model, state.config.coder_model
-                ));
-                return state.config.coder_model.clone();
-            }
-        }
-        hooks.emit(AgentEvent::Routing {
-            summary: decision.summary(),
-        });
-    }
-    decision.selected_model
-}
-
 /// Inline the current content of files implicated by the failing gate so the
 /// repair model can emit a single edit without exploratory reads — small
 /// models routinely answer cold repair prompts in prose instead of tools.
@@ -2402,7 +2369,7 @@ async fn run_agent_mode(
     hooks: &AgentHooks,
 ) {
     let tools = coding_tools(state);
-    let model = route_turn(client, state, task, hooks);
+    let model = state.config.coder_model.clone();
     let prior = state.session.conversation();
     match run_tool_use_iteration(client, state, &model, task, &tools, hooks, &prior, false).await {
         Ok(ToolLoopOutcome::Completed(final_text)) => {
@@ -2758,94 +2725,6 @@ mod tests {
             },
             events,
         )
-    }
-
-    fn routing_state(tag: &str, routing: crate::llm::routing::policy::RoutingPolicy) -> AgentState {
-        let root =
-            std::env::temp_dir().join(format!("anamnesic-routing-{tag}-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        let config = crate::config::settings::Config {
-            workspace_dir: root.join("workspace"),
-            memory_dir: root.join("memory"),
-            routing,
-            ..crate::config::settings::Config::default()
-        };
-        AgentState::new(config).unwrap()
-    }
-
-    #[test]
-    fn route_turn_passthrough_when_routing_disabled() {
-        let state = routing_state(
-            "disabled",
-            crate::llm::routing::policy::RoutingPolicy {
-                enabled: false,
-                ..crate::llm::routing::policy::RoutingPolicy::default()
-            },
-        );
-        let (hooks, events) = recording_hooks();
-        let model = route_turn(&dummy_router(), &state, "explain this function", &hooks);
-        assert_eq!(model, state.config.coder_model);
-        assert!(events.lock().unwrap().is_empty());
-    }
-
-    #[test]
-    fn route_turn_picks_local_and_emits_routing_event() {
-        let mut state = routing_state(
-            "enabled",
-            crate::llm::routing::policy::RoutingPolicy::default(),
-        );
-        state.config.coder_model = "z-ai/glm-5.2".into();
-        let mut models = std::collections::HashMap::new();
-        models.insert(
-            "z-ai/glm-5.2".into(),
-            crate::providers::types::ModelInfo {
-                id: "z-ai/glm-5.2".into(),
-                name: "z-ai/glm-5.2".into(),
-                family: "glm-5.2".into(),
-                reasoning: true,
-                tool_call: true,
-                temperature: false,
-                open_weights: true,
-                attachment: false,
-                limit: crate::providers::types::Limits {
-                    context: 131_072,
-                    output: 4096,
-                },
-                cost: crate::providers::types::Cost {
-                    input: 0.5,
-                    output: 1.0,
-                    cache_read: None,
-                    cache_write: None,
-                },
-                modalities: crate::providers::types::Modalities::default(),
-                knowledge: None,
-                release_date: None,
-            },
-        );
-        let mut catalog = crate::providers::types::Catalog::new();
-        catalog.insert(
-            "nvidia".into(),
-            crate::providers::types::Provider {
-                id: "nvidia".into(),
-                name: "nvidia".into(),
-                api: String::new(),
-                env: vec![],
-                doc: String::new(),
-                models,
-            },
-        );
-        let router = LlmRouter::with_cloud_for_test(
-            crate::llm::client::LlmClient::ollama("http://localhost:11434"),
-            crate::providers::ModelsDevClient { catalog },
-        );
-        let (hooks, events) = recording_hooks();
-        let model = route_turn(&router, &state, "fix the typo in the README", &hooks);
-        assert_eq!(model, "qwen3:1.7b", "routing picked {model}");
-        let evs = events.lock().unwrap();
-        assert!(
-            evs.iter().any(|e| matches!(e, AgentEvent::Routing { .. })),
-            "expected a Routing event, got {evs:?}"
-        );
     }
 
     #[test]
