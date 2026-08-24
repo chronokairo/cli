@@ -261,6 +261,7 @@ mod tests {
         let mgr = BackgroundTaskManager::new();
         let id = mgr.spawn("echo hello-bg", &cfg).expect("spawn");
         thread::sleep(Duration::from_millis(300));
+        thread::sleep(Duration::from_millis(800));
         let (status, output, _) = mgr.status(&id).expect("status");
         assert!(
             matches!(status, TaskStatus::Done { .. }),

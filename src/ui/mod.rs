@@ -416,6 +416,10 @@ impl App {
     /// terminal event (Done/Failed/Interrupted) calls `end_streaming`.
     pub fn feed_text_delta(&mut self, text: &str) {
         const MAX_STREAM_CHARS: usize = 20_000;
+        let text = &strip_ansi_and_controls(text);
+        if text.is_empty() {
+            return;
+        }
         if self.streaming_assistant {
             if let Some((role, last)) = self.messages.last_mut() {
                 if role == "Assistant" && last.chars().count() < MAX_STREAM_CHARS {
@@ -1683,10 +1687,10 @@ pub fn run_ui(client: LlmRouter, state: AgentState) -> Result<(), Box<dyn Error>
             let mut a = app.lock().unwrap();
             for ev in agent_events {
                 match ev {
-                    AgentEvent::Status(text) => a.status = text,
+                    AgentEvent::Status(text) => a.status = sanitize_status(&strip_ansi_and_controls(&text)),
                     AgentEvent::ToolCall { name, summary } => {
-                        let s: String = summary.chars().take(120).collect();
-                        a.add_message("Tool", &format!("{name} — {s}"));
+                        let clean: String = strip_ansi_and_controls(&summary).chars().take(120).collect();
+                        a.add_message("Tool", &format!("{name} — {clean}"));
                     }
                     AgentEvent::ToolCallDelta {
                         index,
@@ -1694,7 +1698,8 @@ pub fn run_ui(client: LlmRouter, state: AgentState) -> Result<(), Box<dyn Error>
                         args_delta,
                     } => {
                         let prefix = name.as_deref().unwrap_or("?");
-                        a.feed_tool_delta(index, prefix, &args_delta);
+                        let clean = strip_ansi_and_controls(&args_delta);
+                        a.feed_tool_delta(index, prefix, &clean);
                     }
                     AgentEvent::PlanStep {
                         index,
@@ -1712,7 +1717,8 @@ pub fn run_ui(client: LlmRouter, state: AgentState) -> Result<(), Box<dyn Error>
                         summary,
                     } => {
                         let command = command.unwrap_or_else(|| "auto-detect".into());
-                        a.add_message("Verify", &format!("[{status}] {command} — {summary}"));
+                        let clean = strip_ansi_and_controls(&summary);
+                        a.add_message("Verify", &format!("[{status}] {command} — {clean}"));
                     }
                     AgentEvent::ReasoningDelta { text } => {
                         a.feed_reasoning_delta(&text);
@@ -1741,7 +1747,8 @@ pub fn run_ui(client: LlmRouter, state: AgentState) -> Result<(), Box<dyn Error>
                     }
                     AgentEvent::Failed { message } => {
                         a.end_streaming(None);
-                        a.add_message("Error", &message);
+                        let clean = strip_ansi_and_controls(&message);
+                        a.add_message("Error", &clean);
                         a.loading = false;
                         a.status = "Failed".into();
                     }
