@@ -1,3 +1,5 @@
+pub mod event_log;
+
 use crate::agent::agent_loop::{
     AgentEvent, AgentHooks, ApprovalDecision, ApprovalRequest, PlanApprovalDecision,
     PlanApprovalRequest,

@@ -5,7 +5,7 @@ edition = "2021"
 description = "Local coding agent — fusion of TinyCoder + llm-on-legacy-gpus"
 
 [[bin]]
-name = "anamnesic"
+name = "chronokairo"
 path = "src/main.rs"
 
 [features]

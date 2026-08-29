@@ -1,14 +1,14 @@
 use crate::config::settings::Config;
 use crate::tools::shell;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum VerificationStatus {
     Passed,
     Failed,
     Unavailable,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct VerificationResult {
     pub status: VerificationStatus,
     pub command: Option<String>,

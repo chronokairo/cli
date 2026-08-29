@@ -47,15 +47,17 @@ src/
 
 ### Migration Checklist (Do Not Skip)
 
-- [ ] Add `protocol` crate with `Op`, `EventMsg`, `Session`.
-- [ ] Add `on_plan_approval` to `AgentHooks`, gate in `run_planner_fallback`.
-- [ ] `exec` subcommand (human/JSONL).
-- [ ] `app-server` subcommand (JSON-RPC stdio).
-- [ ] `mcp-server` subcommand (MCP server with `run_coder` tool).
-- [ ] Split `agent_loop.rs` into `loop.rs` + `tool_registry.rs` + `verify.rs` + `finalize.rs`.
-- [ ] Replace `execute_tool` match with registry dispatch.
-- [ ] Event-log persistence in `AgentState.persist_session`.
-- [ ] TUI consumes `Session` via hooks bridge (not direct `run_agent_loop_with_hooks`).
+- [x] Add `protocol` crate with `Op`, `EventMsg`, `Session`.
+- [x] Add `on_plan_approval` to `AgentHooks`, gate in `run_planner_fallback`.
+- [x] `exec` subcommand (human/JSONL).
+- [x] `app-server` subcommand (JSON-RPC stdio).
+- [x] `mcp-server` subcommand (MCP server with `run_coder` tool).
+- [x] Split `agent_loop.rs` into `loop.rs` + `tool_registry.rs` + `verify.rs` + `finalize.rs` + `subagent.rs`.
+- [x] Replace `execute_tool` match with registry dispatch.
+- [x] Event-log persistence & canonical replay in `protocol/event_log.rs`.
+- [x] Sandbox real e policy engine em `tools/sandbox.rs`.
+- [x] Patch merging unificado e robusto em `tools/patch.rs`.
+- [x] TUI consumes `Session` via hooks bridge (not direct `run_agent_loop_with_hooks`).
 
 ## Documentation Index
 

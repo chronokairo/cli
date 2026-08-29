@@ -86,7 +86,7 @@ fn init_file_logger() -> anyhow::Result<()> {
 
 #[derive(Parser)]
 #[command(
-    name = "slowcode",
+    name = "chronokairo",
     about = "Local coding agent — TinyCoder + llm-on-legacy-gpus fusion"
 )]
 struct Cli {
