@@ -32,6 +32,13 @@ const METHODS: &[&str] = &[
     "check_command_policy",
     "allow_command_always",
     "remove_exec_policy_rule",
+    "search_memories",
+    "collect_git_info",
+    "detect_fsmonitor",
+    "get_default_branch",
+    "get_attribution_policy",
+    "get_git_user_info",
+    "format_commit_attribution",
 ];
 
 pub fn supports(method: &str) -> bool {
@@ -100,8 +107,118 @@ pub fn call(
         "check_command_policy" => check_command_policy(&workspace, &params),
         "allow_command_always" => allow_command_always(&params),
         "remove_exec_policy_rule" => remove_exec_policy_rule(&params),
+        "search_memories" => search_memories(&params),
+        "collect_git_info" => collect_git_info(&workspace),
+        "detect_fsmonitor" => detect_fsmonitor(&workspace),
+        "get_default_branch" => Ok(Value::String(default_branch(&workspace))),
+        "get_attribution_policy" => Ok(attribution_policy(&workspace)),
+        "get_git_user_info" => Ok(git_user_info(&workspace)),
+        "format_commit_attribution" => format_commit_attribution(&workspace, &params),
         _ => Err(format!("unsupported runtime method: {method}")),
     }
+}
+
+fn attribution_policy(workspace: &Path) -> Value {
+    let name = git_output(workspace, &["config", "--get", "chronokairo.agent.name"]);
+    let email = git_output(workspace, &["config", "--get", "chronokairo.agent.email"]);
+    json!({
+        "co_authored_by": true,
+        "include_human": false,
+        "agent_name": if name.is_empty() { "ChronoKairo Agent" } else { &name },
+        "agent_email": if email.is_empty() { "agent@chronokairo.local" } else { &email },
+        "trailer_format": "Co-authored-by: {name} <{email}>"
+    })
+}
+
+fn git_user_info(workspace: &Path) -> Value {
+    json!({"name": git_output(workspace, &["config", "--get", "user.name"]),
+        "email": git_output(workspace, &["config", "--get", "user.email"])})
+}
+
+fn format_commit_attribution(workspace: &Path, params: &Value) -> Result<Value, String> {
+    let message = params.get("message").and_then(Value::as_str).ok_or("message is required")?;
+    let policy = attribution_policy(workspace);
+    if !policy.get("co_authored_by").and_then(Value::as_bool).unwrap_or(true) { return Ok(Value::String(message.to_string())); }
+    let name = policy.get("agent_name").and_then(Value::as_str).unwrap_or("ChronoKairo Agent");
+    let email = policy.get("agent_email").and_then(Value::as_str).unwrap_or("agent@chronokairo.local");
+    let trailer = format!("Co-authored-by: {name} <{email}>");
+    if message.contains(&trailer) { Ok(Value::String(message.to_string())) }
+    else { Ok(Value::String(format!("{}\n\n{trailer}\n", message.trim_end()))) }
+}
+
+fn collect_git_info(workspace: &Path) -> Result<Value, String> {
+    let root = git_output(workspace, &["rev-parse", "--show-toplevel"]);
+    if root.is_empty() {
+        return Ok(json!({"repoRoot": "", "branch": "", "isRepo": false, "remotes": [], "status": ""}));
+    }
+    let remotes = git_output(workspace, &["remote", "-v"])
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            let name = fields.next()?;
+            let url = fields.next()?;
+            (line.ends_with("(fetch)")).then(|| json!({"name": name, "url": url}))
+        }).collect::<Vec<_>>();
+    Ok(json!({
+        "repoRoot": root,
+        "branch": git_output(workspace, &["branch", "--show-current"]),
+        "isRepo": true,
+        "remotes": remotes,
+        "status": git_output(workspace, &["status", "--short"]),
+    }))
+}
+
+fn detect_fsmonitor(workspace: &Path) -> Result<Value, String> {
+    let value = git_output(workspace, &["config", "--get", "core.fsmonitor"]);
+    Ok(json!({"enabled": !value.is_empty() && value != "false", "reason": if value.is_empty() { "not configured" } else { "git core.fsmonitor" }}))
+}
+
+fn default_branch(workspace: &Path) -> String {
+    let remote_head = git_output(workspace, &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]);
+    if let Some(branch) = remote_head.strip_prefix("origin/") { return branch.to_string(); }
+    for candidate in ["main", "master"] {
+        let exists = Command::new("git").args(["show-ref", "--verify", "--quiet", &format!("refs/heads/{candidate}")])
+            .current_dir(workspace).status().is_ok_and(|status| status.success());
+        if exists { return candidate.to_string(); }
+    }
+    let current = git_output(workspace, &["branch", "--show-current"]);
+    if current.is_empty() { "main".to_string() } else { current }
+}
+
+fn search_memories(params: &Value) -> Result<Value, String> {
+    let query = params.get("query").and_then(Value::as_str).unwrap_or("").trim();
+    if query.is_empty() { return Ok(json!([])); }
+    let limit = params.get("limit").and_then(Value::as_u64).unwrap_or(10).clamp(1, 100) as usize;
+    let memory = memory()?;
+    let connection = rusqlite::Connection::open(memory.path()).map_err(|error| error.to_string())?;
+    let mut statement = connection.prepare(
+        "SELECT s.id, COALESCE(s.summary,''), COALESCE(s.timestamp,''), COALESCE(s.model,''),
+                COALESCE(s.message_count,0), COALESCE(m.content,'')
+         FROM sessions s LEFT JOIN session_messages m ON m.session_id = s.id
+         WHERE s.status = 'active' AND (s.summary LIKE ?1 OR m.content LIKE ?1)
+         ORDER BY s.updated_at DESC LIMIT 500"
+    ).map_err(|error| error.to_string())?;
+    let pattern = format!("%{query}%");
+    let rows = statement.query_map([pattern], |row| Ok((
+        row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?,
+        row.get::<_, String>(3)?, row.get::<_, usize>(4)?, row.get::<_, String>(5)?,
+    ))).map_err(|error| error.to_string())?;
+    let query_lower = query.to_lowercase();
+    let mut by_session = std::collections::HashMap::<i64, Value>::new();
+    for row in rows.flatten() {
+        let (id, summary, timestamp, model, message_count, content) = row;
+        let source = if summary.to_lowercase().contains(&query_lower) { &summary } else { &content };
+        let score = source.to_lowercase().matches(&query_lower).count().max(1) as f64;
+        let snippet = source.chars().take(240).collect::<String>();
+        let candidate = json!({"sessionId": id, "session_id": id, "summary": summary, "snippet": snippet,
+            "score": score, "timestamp": timestamp, "model": model, "message_count": message_count});
+        let replace = by_session.get(&id).and_then(|value| value.get("score")).and_then(Value::as_f64).unwrap_or(0.0) < score;
+        if replace { by_session.insert(id, candidate); }
+    }
+    let mut results = by_session.into_values().collect::<Vec<_>>();
+    results.sort_by(|a, b| b.get("score").and_then(Value::as_f64).partial_cmp(&a.get("score").and_then(Value::as_f64)).unwrap_or(std::cmp::Ordering::Equal));
+    results.truncate(limit);
+    Ok(Value::Array(results))
 }
 
 fn get_exec_policy() -> Result<Value, String> {
