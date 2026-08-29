@@ -39,6 +39,8 @@ struct JsonRpcNotification {
 
 pub struct AppServer {
     session: Arc<Session>,
+    workspace: std::path::PathBuf,
+    model: String,
     pending_requests: Arc<Mutex<HashMap<u64, tokio::sync::oneshot::Sender<Value>>>>,
     next_request_id: Arc<Mutex<u64>>,
 }
@@ -48,9 +50,13 @@ impl AppServer {
         client: crate::llm::router::LlmRouter,
         state: crate::agent::state::AgentState,
     ) -> Self {
+        let workspace = state.config.workspace_dir.clone();
+        let model = state.config.coder_model.clone();
         let session = Arc::new(Session::spawn(client, state));
         Self {
             session,
+            workspace,
+            model,
             pending_requests: Arc::new(Mutex::new(HashMap::new())),
             next_request_id: Arc::new(Mutex::new(1)),
         }
@@ -99,9 +105,14 @@ impl AppServer {
             match request.method.as_str() {
                 "initialize" => {
                     let result = serde_json::json!({
-                        "protocolVersion": "2024-11-05",
-                        "capabilities": {},
-                        "serverInfo": {"name": "anamnesic-coder", "version": "0.1.0"}
+                        "protocolVersion": 1,
+                        "capabilities": {
+                            "tasks": "v1",
+                            "approvals": "v1",
+                            "streaming": "v1",
+                            "interrupt": "v1"
+                        },
+                        "serverInfo": {"name": "chronokairo", "version": env!("CARGO_PKG_VERSION")}
                     });
                     self.write_response(request.id, Some(result), None)?;
                 }
@@ -173,6 +184,12 @@ impl AppServer {
                     self.write_response(request.id, Some(serde_json::json!({"ok": true})), None)?;
                     break;
                 }
+                method if runtime_api::supports(method) => {
+                    match runtime_api::call(method, request.params.as_ref(), &self.workspace, &self.model) {
+                        Ok(result) => self.write_response(request.id, Some(result), None)?,
+                        Err(message) => self.write_error(request.id, -32001, &message)?,
+                    }
+                }
                 _ => {
                     self.write_error(request.id, -32601, "Method not found")?;
                 }
@@ -213,3 +230,4 @@ impl AppServer {
         )
     }
 }
+mod runtime_api;

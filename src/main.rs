@@ -230,7 +230,7 @@ async fn build_router(cli: &Cli, cfg: &mut Config) -> Result<LlmRouter> {
     let local = if cfg.use_local {
         let model_name = cli.model.as_deref().unwrap_or("gemma3:1b");
         let blob_path = model_resolver::resolve_model(model_name, &cfg.models_dir)?;
-        println!("Loading {} from {}...", model_name, blob_path.display());
+        eprintln!("Loading {} from {}...", model_name, blob_path.display());
         let model = Model::load(&blob_path.to_string_lossy())?;
         let reader = GgufReader::load(&blob_path.to_string_lossy())?;
         let tokenizer = Tokenizer::load_from_gguf(&reader)?;
@@ -274,7 +274,7 @@ async fn build_router(cli: &Cli, cfg: &mut Config) -> Result<LlmRouter> {
         // Plain-name cloud models (e.g. Ollama Cloud) have no `/` prefix, so
         // mark them explicitly so the router sends them to the cloud backend.
         router.mark_cloud(&model);
-        println!(
+        eprintln!(
             "Cloud inference: provider='{}' base={} model={}",
             cli.provider, base, model
         );
@@ -293,7 +293,9 @@ async fn main() -> Result<()> {
             && cli.task.is_none()
             && std::io::stdin().is_terminal()
             && std::io::stdout().is_terminal());
-    if tui_mode {
+    let protocol_mode = matches!(cli.command, Some(Commands::AppServer | Commands::McpServer))
+        || matches!(cli.command, Some(Commands::Exec { jsonl: true, .. }));
+    if tui_mode || protocol_mode {
         init_file_logger()?;
     } else {
         simple_logger::init_with_level(log::Level::Info).ok();
