@@ -2,6 +2,7 @@
 //! All coding-runtime data is owned here; clients only render the result.
 
 use serde_json::{json, Value};
+use base64::Engine;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -20,6 +21,17 @@ const METHODS: &[&str] = &[
     "get_context_fragments",
     "assemble_context_fragments",
     "preview_context_for_prompt",
+    "search_files",
+    "get_file_watch_snapshot",
+    "apply_patch_dry_run",
+    "apply_patch_commit",
+    "apply_patch_commit_with_backup",
+    "revert_patch",
+    "get_exec_policy",
+    "set_exec_policy",
+    "check_command_policy",
+    "allow_command_always",
+    "remove_exec_policy_rule",
 ];
 
 pub fn supports(method: &str) -> bool {
@@ -77,8 +89,251 @@ pub fn call(
                 .cloned()
                 .unwrap_or(Value::String(String::new()))
         }),
+        "search_files" => search_files(&workspace, &params),
+        "get_file_watch_snapshot" => file_watch_snapshot(&workspace, &params),
+        "apply_patch_dry_run" => patch_dry_run(&workspace, &params),
+        "apply_patch_commit" => patch_commit(&workspace, &params, false),
+        "apply_patch_commit_with_backup" => patch_commit(&workspace, &params, true),
+        "revert_patch" => revert_patch(&workspace, &params),
+        "get_exec_policy" => get_exec_policy(),
+        "set_exec_policy" => set_exec_policy(&params),
+        "check_command_policy" => check_command_policy(&workspace, &params),
+        "allow_command_always" => allow_command_always(&params),
+        "remove_exec_policy_rule" => remove_exec_policy_rule(&params),
         _ => Err(format!("unsupported runtime method: {method}")),
     }
+}
+
+fn get_exec_policy() -> Result<Value, String> {
+    serde_json::to_value(crate::tools::exec_policy::load_default()).map_err(|error| error.to_string())
+}
+
+fn set_exec_policy(params: &Value) -> Result<Value, String> {
+    let policy: crate::tools::exec_policy::ExecPolicy = serde_json::from_value(
+        params.get("policy").cloned().ok_or("policy is required")?,
+    ).map_err(|error| error.to_string())?;
+    policy.save(&crate::tools::exec_policy::default_path())?;
+    Ok(json!({"ok": true}))
+}
+
+fn check_command_policy(workspace: &Path, params: &Value) -> Result<Value, String> {
+    let command = params.get("command").and_then(Value::as_array)
+        .ok_or("command is required")?.iter().filter_map(Value::as_str)
+        .map(str::to_string).collect::<Vec<_>>();
+    let policy = crate::tools::exec_policy::load_default();
+    let (decision, rule) = policy.check(&command, Some(workspace));
+    let decision_name = match decision {
+        crate::tools::exec_policy::Decision::Allow => "allow",
+        crate::tools::exec_policy::Decision::Prompt => "prompt",
+        crate::tools::exec_policy::Decision::Forbidden => "forbidden",
+    };
+    Ok(json!({"allowed": decision_name == "allow", "decision": decision_name, "rule": rule}))
+}
+
+fn allow_command_always(params: &Value) -> Result<Value, String> {
+    let command = params.get("command").and_then(Value::as_str).ok_or("command is required")?;
+    let mut policy = crate::tools::exec_policy::load_default();
+    policy.rules.push(crate::tools::exec_policy::ExecRule {
+        command: command.to_string(),
+        decision: crate::tools::exec_policy::Decision::Allow,
+        scope: params.get("scope").and_then(Value::as_str).map(str::to_string),
+        justification: Some(format!("Allowed from runtime panel at {}", chrono::Utc::now().to_rfc3339())),
+    });
+    policy.save(&crate::tools::exec_policy::default_path())?;
+    Ok(json!({"ok": true}))
+}
+
+fn remove_exec_policy_rule(params: &Value) -> Result<Value, String> {
+    let command = params.get("command").and_then(Value::as_str).ok_or("command is required")?;
+    let mut policy = crate::tools::exec_policy::load_default();
+    policy.rules.retain(|rule| rule.command != command);
+    policy.save(&crate::tools::exec_policy::default_path())?;
+    Ok(json!({"ok": true}))
+}
+
+fn patch_text(params: &Value) -> Result<&str, String> {
+    params
+        .get("patch")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| "patch is required".to_string())
+}
+
+fn patch_result(results: Vec<crate::tools::patch::PatchResult>, patch_id: Option<u64>) -> Value {
+    let modified_files = results.iter().map(|item| item.file_path.clone()).collect::<Vec<_>>();
+    let summary = format!("applied {} file(s)", results.len());
+    json!({
+        "success": true,
+        "patch_id": patch_id,
+        "summary": summary,
+        "modifiedFiles": modified_files,
+        "applied": results,
+    })
+}
+
+fn patch_dry_run(workspace: &Path, params: &Value) -> Result<Value, String> {
+    let results = crate::tools::patch::preview_patch(workspace, patch_text(params)?)
+        .map_err(|error| error.to_string())?;
+    let changes = results
+        .iter()
+        .map(|item| json!({
+            "path": item.file_path,
+            "addedLines": item.lines_added,
+            "deletedLines": item.lines_removed,
+        }))
+        .collect::<Vec<_>>();
+    Ok(json!({
+        "valid": true,
+        "fileChanges": changes,
+        "changes": changes,
+        "conflicts": [],
+        "summary": format!("{} file(s) would be changed", results.len()),
+    }))
+}
+
+fn backup_directory() -> PathBuf {
+    crate::config::home_dir().join(".anamnesic").join("patch-backups")
+}
+
+fn patch_commit(workspace: &Path, params: &Value, backup: bool) -> Result<Value, String> {
+    let patch = patch_text(params)?;
+    // Preview validates every hunk before any write begins.
+    crate::tools::patch::preview_patch(workspace, patch).map_err(|error| error.to_string())?;
+    let patch_id = chrono::Utc::now().timestamp_millis().unsigned_abs();
+    if backup {
+        let canonical_workspace = workspace.canonicalize().map_err(|error| error.to_string())?;
+        let entries = crate::tools::patch::affected_paths(patch)
+            .map_err(|error| error.to_string())?
+            .into_iter()
+            .map(|relative| {
+                let path = canonical_workspace.join(&relative);
+                let parent = path.parent().unwrap_or(&canonical_workspace);
+                let parent = parent.canonicalize().unwrap_or_else(|_| parent.to_path_buf());
+                if !parent.starts_with(&canonical_workspace) {
+                    return Err(format!("patch path escapes workspace: {relative}"));
+                }
+                let original = std::fs::read(&path).ok().map(|bytes| {
+                    base64::engine::general_purpose::STANDARD.encode(bytes)
+                });
+                Ok(json!({"path": relative, "original": original}))
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        let directory = backup_directory();
+        std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+        let manifest = json!({
+            "patchId": patch_id,
+            "workspace": canonical_workspace.to_string_lossy(),
+            "entries": entries,
+        });
+        std::fs::write(
+            directory.join(format!("{patch_id}.json")),
+            serde_json::to_vec_pretty(&manifest).map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| error.to_string())?;
+    }
+    let results = crate::tools::patch::apply_patch(workspace, patch)
+        .map_err(|error| error.to_string())?;
+    Ok(patch_result(results, backup.then_some(patch_id)))
+}
+
+fn revert_patch(workspace: &Path, params: &Value) -> Result<Value, String> {
+    let patch_id = params
+        .get("patchId")
+        .or_else(|| params.get("patch_id"))
+        .and_then(Value::as_u64)
+        .ok_or_else(|| "patchId is required".to_string())?;
+    let manifest_path = backup_directory().join(format!("{patch_id}.json"));
+    let manifest: Value = serde_json::from_slice(
+        &std::fs::read(&manifest_path).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+    let canonical_workspace = workspace.canonicalize().map_err(|error| error.to_string())?;
+    if manifest.get("workspace").and_then(Value::as_str)
+        != Some(canonical_workspace.to_string_lossy().as_ref())
+    {
+        return Err("patch backup belongs to a different workspace".to_string());
+    }
+    let mut modified_files = Vec::new();
+    for entry in manifest.get("entries").and_then(Value::as_array).into_iter().flatten() {
+        let relative = entry.get("path").and_then(Value::as_str).ok_or("invalid backup path")?;
+        let path = canonical_workspace.join(relative);
+        let parent = path.parent().unwrap_or(&canonical_workspace);
+        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        if let Some(encoded) = entry.get("original").and_then(Value::as_str) {
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(encoded)
+                .map_err(|error| error.to_string())?;
+            std::fs::write(&path, bytes).map_err(|error| error.to_string())?;
+        } else if path.exists() {
+            std::fs::remove_file(&path).map_err(|error| error.to_string())?;
+        }
+        modified_files.push(relative.to_string());
+    }
+    std::fs::remove_file(manifest_path).map_err(|error| error.to_string())?;
+    Ok(json!({"success": true, "patch_id": patch_id, "modifiedFiles": modified_files, "summary": "patch reverted"}))
+}
+
+fn search_files(default_workspace: &Path, params: &Value) -> Result<Value, String> {
+    let query = params.get("query").and_then(Value::as_str).unwrap_or("");
+    let limit = params.get("limit").and_then(Value::as_u64).unwrap_or(20) as usize;
+    let roots: Vec<PathBuf> = params
+        .get("roots")
+        .and_then(Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(Value::as_str)
+                .map(PathBuf::from)
+                .collect()
+        })
+        .filter(|values: &Vec<PathBuf>| !values.is_empty())
+        .unwrap_or_else(|| vec![default_workspace.to_path_buf()]);
+
+    let mut all = Vec::new();
+    for root in roots {
+        let root = root.canonicalize().map_err(|error| error.to_string())?;
+        for relative in crate::ui::file_search::walk_files(&root) {
+            all.push(root.join(relative).to_string_lossy().to_string());
+        }
+    }
+    let ranked = crate::ui::file_search::search_files(&all, query, usize::MAX);
+    let total_matches = ranked.len();
+    let results = ranked
+        .into_iter()
+        .take(limit)
+        .map(|entry| {
+            json!({
+                "path": entry.path,
+                "score": entry.score,
+                "isExact": entry.path.eq_ignore_ascii_case(query),
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(json!({"results": results, "totalMatches": total_matches}))
+}
+
+fn file_watch_snapshot(workspace: &Path, params: &Value) -> Result<Value, String> {
+    let since = params
+        .get("since")
+        .and_then(Value::as_str)
+        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+        .map(|value| value.with_timezone(&chrono::Utc))
+        .unwrap_or_else(|| chrono::Utc::now() - chrono::Duration::hours(1));
+    let candidates = [
+        "AGENTS.md", "CLAUDE.md", "package.json", "Cargo.toml", ".git/HEAD", ".git/index",
+    ];
+    let events = candidates
+        .iter()
+        .filter_map(|name| {
+            let path = workspace.join(name);
+            let modified = path.metadata().ok()?.modified().ok()?;
+            let modified = chrono::DateTime::<chrono::Utc>::from(modified);
+            (modified > since).then(|| {
+                json!({"path": path.to_string_lossy(), "kind": "modify"})
+            })
+        })
+        .collect::<Vec<_>>();
+    Ok(json!({"events": events, "timestamp": chrono::Utc::now().to_rfc3339()}))
 }
 
 fn memory() -> Result<crate::memory::log::LongTermMemory, String> {
@@ -320,4 +575,53 @@ fn overview(workspace: &Path, model: &str) -> Result<Value, String> {
         "memory_sessions": memory_sessions,
         "repos": git.get("repos").cloned().unwrap_or_else(|| json!([])),
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_workspace(name: &str) -> PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "chronokairo-runtime-api-{name}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).unwrap();
+        path
+    }
+
+    #[test]
+    fn patch_dry_run_does_not_write_and_backup_can_revert() {
+        let workspace = test_workspace("patch");
+        let file = workspace.join("sample.txt");
+        std::fs::write(&file, "old\n").unwrap();
+        let params = json!({
+            "patch": "--- a/sample.txt\n+++ b/sample.txt\n@@ -1,1 +1,1 @@\n-old\n+new"
+        });
+
+        let preview = patch_dry_run(&workspace, &params).unwrap();
+        assert_eq!(preview.get("valid"), Some(&Value::Bool(true)));
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "old\n");
+
+        let applied = patch_commit(&workspace, &params, true).unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "new\n");
+        let patch_id = applied.get("patch_id").and_then(Value::as_u64).unwrap();
+        revert_patch(&workspace, &json!({"patchId": patch_id})).unwrap();
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), "old\n");
+        std::fs::remove_dir_all(workspace).unwrap();
+    }
+
+    #[test]
+    fn file_search_returns_frontend_contract() {
+        let workspace = test_workspace("search");
+        std::fs::write(workspace.join("runtime_boundary.md"), "boundary").unwrap();
+        let result = search_files(
+            &workspace,
+            &json!({"query": "runtime", "roots": [workspace], "limit": 10}),
+        )
+        .unwrap();
+        assert_eq!(result.get("totalMatches"), Some(&json!(1)));
+        assert_eq!(result.get("results").and_then(Value::as_array).unwrap().len(), 1);
+    }
 }

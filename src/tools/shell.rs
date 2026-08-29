@@ -233,6 +233,9 @@ pub fn is_allowed(cmd: &str, config: &Config) -> bool {
 
 /// Run an allowlisted command with a timeout and return combined output.
 pub fn run_command(cmd: &str, config: &Config) -> String {
+    if super::exec_policy::command_is_forbidden(cmd, &config.workspace_dir) {
+        return format!("Command forbidden by persistent execution policy: {cmd}");
+    }
     if escapes_workspace(cmd, config) {
         return format!(
             "Command rejected: it mutates a path outside the workspace (and outside PATH_ALLOWLIST): {}",
@@ -261,6 +264,14 @@ pub fn run_command_raw_with_interrupt(
     config: &Config,
     interrupt: Option<&std::sync::atomic::AtomicBool>,
 ) -> CommandOutput {
+    if super::exec_policy::command_is_forbidden(cmd, &config.workspace_dir) {
+        return CommandOutput {
+            code: None,
+            stdout: String::new(),
+            stderr: format!("Command forbidden by persistent execution policy: {cmd}"),
+            timed_out: false,
+        };
+    }
     if escapes_workspace(cmd, config) {
         return CommandOutput {
             code: None,

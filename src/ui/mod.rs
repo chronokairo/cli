@@ -36,7 +36,7 @@ use crate::config::settings::ApprovalPolicy;
 use crate::llm::router::{LlmRouter, DEFAULT_PROVIDER};
 
 mod diff_render;
-mod file_search;
+pub(crate) mod file_search;
 mod line_truncation;
 mod live_wrap;
 mod pager_overlay;

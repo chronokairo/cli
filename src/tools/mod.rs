@@ -1,4 +1,5 @@
 pub mod background;
+pub mod exec_policy;
 pub mod fs;
 pub mod git;
 pub mod patch;

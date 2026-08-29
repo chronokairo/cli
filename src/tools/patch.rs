@@ -3,7 +3,7 @@ use std::fs;
 use std::path::Path;
 
 /// Result of applying a patch
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct PatchResult {
     pub file_path: String,
     pub lines_added: usize,
@@ -129,7 +129,32 @@ fn parse_range(range_str: &str) -> (usize, usize) {
 }
 
 /// Applies a parsed file diff to a file in the workspace
+pub fn affected_paths(patch_str: &str) -> Result<Vec<String>> {
+    let paths = parse_unified_diff(patch_str)?
+        .into_iter()
+        .map(|diff| {
+            diff.new_file
+                .or(diff.old_file)
+                .ok_or_else(|| anyhow!("Diff missing target file path"))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    if paths.is_empty() {
+        return Err(anyhow!("No valid file diffs found in patch"));
+    }
+    Ok(paths)
+}
+
+/// Validate and calculate a patch without changing the workspace.
+pub fn preview_patch(workspace_root: &Path, patch_str: &str) -> Result<Vec<PatchResult>> {
+    process_patch(workspace_root, patch_str, false)
+}
+
+/// Apply a parsed patch to the workspace.
 pub fn apply_patch(workspace_root: &Path, patch_str: &str) -> Result<Vec<PatchResult>> {
+    process_patch(workspace_root, patch_str, true)
+}
+
+fn process_patch(workspace_root: &Path, patch_str: &str, write: bool) -> Result<Vec<PatchResult>> {
     let file_diffs = parse_unified_diff(patch_str)?;
     if file_diffs.is_empty() {
         return Err(anyhow!("No valid file diffs found in patch"));
@@ -216,12 +241,14 @@ pub fn apply_patch(workspace_root: &Path, patch_str: &str) -> Result<Vec<PatchRe
             new_content.push('\n');
         }
 
-        if let Some(parent) = full_path.parent() {
-            fs::create_dir_all(parent)?;
-        }
+        if write {
+            if let Some(parent) = full_path.parent() {
+                fs::create_dir_all(parent)?;
+            }
 
-        fs::write(&full_path, &new_content)
-            .with_context(|| format!("Writing patched content to {}", full_path.display()))?;
+            fs::write(&full_path, &new_content)
+                .with_context(|| format!("Writing patched content to {}", full_path.display()))?;
+        }
 
         let new_digest = sha256_digest(new_content.as_bytes());
 
