@@ -45,6 +45,7 @@ base64 = "0.22"
 lsp-types = "0.97.0"
 tower-lsp = "0.20.0"
 parking_lot = "0.12"
+lopdf = "0.34"
 
 [dev-dependencies]
 wiremock = "0.6"

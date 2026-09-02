@@ -182,6 +182,23 @@ enum Commands {
     AppServer,
     /// Run MCP server exposing the harness as tools
     McpServer,
+    /// Translate a PDF document in real-time using local Ollama models
+    Translate {
+        /// Path to the PDF file
+        file: PathBuf,
+        /// Ollama model to use for translation (default: qwen2.5:7b)
+        #[arg(short, long, default_value = "qwen2.5:7b")]
+        model: String,
+        /// Target language (default: "Português (Brasil)")
+        #[arg(short, long, default_value = "Português (Brasil)")]
+        to: String,
+        /// GPU device to use ('0' for NVIDIA GTX 1650, '1' for Intel UHD, 'cpu' for CPU only, 'auto')
+        #[arg(short, long)]
+        gpu: Option<String>,
+        /// Output file path (e.g. translated.md)
+        #[arg(short, long)]
+        out: Option<PathBuf>,
+    },
 }
 
 /// Sub-actions for `rust-agent providers`
@@ -322,6 +339,26 @@ async fn main() -> Result<()> {
         );
         return Ok(());
     }
+
+    if let Some(Commands::Translate {
+        file,
+        model,
+        to,
+        gpu,
+        out,
+    }) = cli.command
+    {
+        return crate::tools::pdf_translator::translate_pdf_cli(
+            &file,
+            &model,
+            &to,
+            out.as_deref(),
+            &cfg.ollama_host,
+            gpu.as_deref(),
+        )
+        .await;
+    }
+
     let client = build_router(&cli, &mut cfg).await?;
     let mut state = AgentState::new(cfg)?;
     if cli.cont || cli.resume {
@@ -414,6 +451,23 @@ async fn main() -> Result<()> {
         Some(Commands::McpServer) => {
             let server = McpServer::new(client, state);
             server.run_stdio()?;
+        }
+        Some(Commands::Translate {
+            file,
+            model,
+            to,
+            gpu,
+            out,
+        }) => {
+            crate::tools::pdf_translator::translate_pdf_cli(
+                &file,
+                &model,
+                &to,
+                out.as_deref(),
+                &state.config.ollama_host,
+                gpu.as_deref(),
+            )
+            .await?;
         }
         None => {
             if let Some(task) = cli.task {
