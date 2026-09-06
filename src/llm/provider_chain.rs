@@ -144,7 +144,7 @@ pub trait CompletionProvider: Send + Sync {
 // ---------- Provider NIM com rate limiter embutido ----------
 
 pub struct NimProvider {
-    client: reqwest::Client,
+    client: crate::http::Client,
     api_key: String,
     model: String,
     base_url: String,
@@ -154,7 +154,7 @@ pub struct NimProvider {
 impl NimProvider {
     pub fn new(base_url: &str, api_key: String, model: String, rpm: f64) -> Self {
         Self {
-            client: reqwest::Client::new(),
+            client: crate::http::Client::new(),
             api_key,
             model,
             base_url: base_url.trim_end_matches('/').to_string(),
@@ -186,13 +186,12 @@ impl CompletionProvider for NimProvider {
 
         let status = resp.status().as_u16();
         if status != 200 {
-            let body = resp.text().await.unwrap_or_default();
+            let body = resp.text().unwrap_or_default();
             return Err(ProviderError::from_status(status, &body));
         }
 
         let json: serde_json::Value = resp
             .json()
-            .await
             .map_err(|e| ProviderError::Transient(e.to_string()))?;
 
         json["choices"][0]["message"]["content"]
@@ -205,7 +204,7 @@ impl CompletionProvider for NimProvider {
 // ---------- Provider local (Ollama no T1000/1650) ----------
 
 pub struct LocalProvider {
-    client: reqwest::Client,
+    client: crate::http::Client,
     endpoint: String, // ex: http://localhost:11434
     model: String,    // ex: nemotron-3-nano
 }
@@ -213,7 +212,7 @@ pub struct LocalProvider {
 impl LocalProvider {
     pub fn new(endpoint: String, model: String) -> Self {
         Self {
-            client: reqwest::Client::new(),
+            client: crate::http::Client::new(),
             endpoint,
             model,
         }
@@ -240,13 +239,12 @@ impl CompletionProvider for LocalProvider {
 
         let status = resp.status().as_u16();
         if status != 200 {
-            let body = resp.text().await.unwrap_or_default();
+            let body = resp.text().unwrap_or_default();
             return Err(ProviderError::from_status(status, &body));
         }
 
         let json: serde_json::Value = resp
             .json()
-            .await
             .map_err(|e| ProviderError::Transient(e.to_string()))?;
 
         json["response"]
@@ -524,3 +522,4 @@ use std::sync::Arc;
         });
     }
 }
+

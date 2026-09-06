@@ -15,7 +15,7 @@ pub async fn test_provider(provider_id: &str, entry: &ProviderEntry) -> Result<S
         .unwrap_or_else(|| default_base(provider_id));
     let models_url = format!("{}/models", base.trim_end_matches('/'));
 
-    let response = reqwest::Client::new()
+    let response = crate::http::Client::new()
         .get(&models_url)
         .bearer_auth(api_key)
         .timeout(std::time::Duration::from_secs(10))
@@ -35,7 +35,7 @@ pub async fn test_provider(provider_id: &str, entry: &ProviderEntry) -> Result<S
         bail!("HTTP {status} from {models_url}");
     }
 
-    let body = response.text().await.unwrap_or_default();
+    let body = response.text().unwrap_or_default();
     let count = serde_json::from_str::<serde_json::Value>(&body)
         .ok()
         .and_then(|value| value.get("data")?.as_array().map(Vec::len));

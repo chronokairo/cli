@@ -240,7 +240,7 @@ struct CloudStreamDeltaContent {
 
 pub struct OllamaClient {
     host: String,
-    client: reqwest::Client,
+    client: crate::http::Client,
 }
 
 impl Clone for OllamaClient {
@@ -256,7 +256,7 @@ impl Clone for OllamaClient {
 pub struct CloudClient {
     base_url: String,
     api_key: String,
-    client: reqwest::Client,
+    client: crate::http::Client,
 }
 
 impl Clone for CloudClient {
@@ -546,7 +546,7 @@ impl OllamaClient {
     pub fn new(host: &str) -> Self {
         Self {
             host: host.trim_end_matches('/').to_string(),
-            client: reqwest::Client::new(),
+            client: crate::http::Client::new(),
         }
     }
 
@@ -574,7 +574,6 @@ impl OllamaClient {
 
         let data: serde_json::Value = resp
             .json()
-            .await
             .context("Failed to parse Ollama response")?;
 
         // Check if the response contains tool_calls
@@ -651,13 +650,12 @@ impl OllamaClient {
 
         if !resp.status().is_success() {
             let status = resp.status();
-            let text = resp.text().await.unwrap_or_default();
+            let text = resp.text().unwrap_or_default();
             crate::error::bail!("Ollama chat request failed: HTTP {status} {text}");
         }
 
         let data: ChatResponse = resp
             .json()
-            .await
             .context("Failed to parse Ollama chat response")?;
         let tool_calls = data.message.tool_calls.unwrap_or_default();
         let finish_reason = if tool_calls.is_empty() {
@@ -715,7 +713,7 @@ impl OllamaClient {
             .context("Ollama stream request failed")?;
         if !resp.status().is_success() {
             let status = resp.status();
-            let text = resp.text().await.unwrap_or_default();
+            let text = resp.text().unwrap_or_default();
             crate::error::bail!("Ollama stream request failed: HTTP {status} {text}");
         }
 
@@ -837,7 +835,7 @@ impl OllamaClient {
             .context("Ollama stream request failed")?;
         if !resp.status().is_success() {
             let status = resp.status();
-            let text = resp.text().await.unwrap_or_default();
+            let text = resp.text().unwrap_or_default();
             crate::error::bail!("Ollama stream request failed: HTTP {status} {text}");
         }
 
@@ -968,7 +966,7 @@ impl CloudClient {
         Self {
             base_url: base_url.trim_end_matches('/').to_string(),
             api_key: api_key.to_string(),
-            client: reqwest::Client::builder()
+            client: crate::http::Client::builder()
                 .timeout(std::time::Duration::from_secs(60))
                 .build()
                 .unwrap_or_default(),
@@ -1029,19 +1027,18 @@ impl CloudClient {
             .send()
             .await
             .context("cloud completions request failed")?;
-        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+        if resp.status() == crate::http::StatusCode::NOT_FOUND {
             let messages = vec![serde_json::json!({"role": "user", "content": prompt})];
             return self.chat(model, messages, tools, response_format).await;
         }
         if !resp.status().is_success() {
             let status = resp.status();
-            let text = resp.text().await.unwrap_or_default();
+            let text = resp.text().unwrap_or_default();
             crate::error::bail!("cloud completions request failed: HTTP {status} {text}");
         }
 
         let data: serde_json::Value = resp
             .json()
-            .await
             .context("Failed to parse cloud completions response")?;
 
         if let Some(tool_calls) = data["choices"][0]["message"]["tool_calls"].as_array() {
@@ -1115,7 +1112,6 @@ impl CloudClient {
             if resp.status().is_success() {
                 let data: CloudChatResponse = resp
                     .json()
-                    .await
                     .context("Failed to parse cloud chat response")?;
                 let choice = data
                     .choices
@@ -1140,7 +1136,7 @@ impl CloudClient {
 
             let status = resp.status();
             let status_code = status.as_u16();
-            let text = resp.text().await.unwrap_or_default();
+            let text = resp.text().unwrap_or_default();
             let retryable = status_code == 429
                 || status_code == 500
                 || status_code == 502
@@ -1202,7 +1198,7 @@ impl CloudClient {
             .context("cloud stream request failed")?;
         if !resp.status().is_success() {
             let status = resp.status();
-            let text = resp.text().await.unwrap_or_default();
+            let text = resp.text().unwrap_or_default();
             crate::error::bail!("cloud stream request failed: HTTP {status} {text}");
         }
 
@@ -1303,7 +1299,7 @@ impl CloudClient {
             .context("cloud stream request failed")?;
         if !resp.status().is_success() {
             let status = resp.status();
-            let text = resp.text().await.unwrap_or_default();
+            let text = resp.text().unwrap_or_default();
             crate::error::bail!("cloud stream request failed: HTTP {status} {text}");
         }
 
@@ -1753,3 +1749,5 @@ mod tests {
             if !std::thread::panicking() { result.expect("SSE fixture worker panicked").expect("SSE fixture failed"); }
         }
     }}
+
+

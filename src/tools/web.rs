@@ -3,25 +3,24 @@ use crate::error::Context;
 /// Fetch a URL (http/https) and return its text content. HTML pages are
 /// stripped to readable text. The response body is capped at `max_bytes`.
 pub fn http_fetch(url: &str, max_bytes: usize, timeout_secs: u64) -> crate::error::Result<String> {
-    let parsed = reqwest::Url::parse(url).context("invalid URL")?;
+    let parsed = crate::http::Url::parse(url).map_err(|e| crate::error::message(e)).context("invalid URL")?;
     if !matches!(parsed.scheme(), "http" | "https") {
         crate::error::bail!("only http/https URLs are allowed");
     }
-    let client = reqwest::blocking::Client::builder()
+    let client = crate::http::blocking::Client::builder()
         .user_agent(web_ua())
         .timeout(std::time::Duration::from_secs(timeout_secs.max(1)))
         .build()
         .context("building HTTP client")?;
-    let response = client.get(parsed).send().context("HTTP request failed")?;
+    let response = client.get(parsed.as_str()).send().context("HTTP request failed")?;
     if !response.status().is_success() {
         crate::error::bail!("HTTP {}", response.status());
     }
     let content_type = response
         .headers()
-        .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .unwrap_or("")
-        .to_string();
+        .get(crate::http::header::CONTENT_TYPE)
+        .cloned()
+        .unwrap_or_default();
     let body = response.bytes().context("reading response body")?;
     let body = String::from_utf8_lossy(&body).into_owned();
     let text = if content_type.contains("html") {
@@ -39,7 +38,7 @@ pub fn web_search(query: &str, max_results: usize, timeout_secs: u64) -> crate::
     if query.is_empty() {
         crate::error::bail!("query must not be empty");
     }
-    let client = reqwest::blocking::Client::builder()
+    let client = crate::http::blocking::Client::builder()
         .user_agent(web_ua())
         .timeout(std::time::Duration::from_secs(timeout_secs.max(1)))
         .build()
@@ -52,14 +51,15 @@ pub fn web_search(query: &str, max_results: usize, timeout_secs: u64) -> crate::
 }
 
 fn searxng_search(
-    client: &reqwest::blocking::Client,
+    client: &crate::http::blocking::Client,
     searxng_url: &str,
     query: &str,
     max_results: usize,
 ) -> crate::error::Result<String> {
-    let url = reqwest::Url::parse_with_params(searxng_url, &[("q", query), ("format", "json")])
+    let url = crate::http::Url::parse_with_params(searxng_url, &[("q", query), ("format", "json")])
+        .map_err(|e| crate::error::message(e))
         .context("invalid WEB_SEARCH_URL")?;
-    let response = client.get(url).send().context("SearXNG request failed")?;
+    let response = client.get(url.as_str()).send().context("SearXNG request failed")?;
     if !response.status().is_success() {
         crate::error::bail!("SearXNG HTTP {}", response.status());
     }
@@ -86,14 +86,15 @@ fn searxng_search(
 }
 
 fn duckduckgo_search(
-    client: &reqwest::blocking::Client,
+    client: &crate::http::blocking::Client,
     query: &str,
     max_results: usize,
 ) -> crate::error::Result<String> {
     let url =
-        reqwest::Url::parse_with_params("https://html.duckduckgo.com/html/", &[("q", query)])?;
+        crate::http::Url::parse_with_params("https://html.duckduckgo.com/html/", &[("q", query)])
+            .map_err(|e| crate::error::message(e))?;
     let response = client
-        .get(url)
+        .get(url.as_str())
         .send()
         .context("DuckDuckGo request failed")?;
     if !response.status().is_success() {

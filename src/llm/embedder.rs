@@ -127,7 +127,7 @@ fn resolve_source() -> Option<PathBuf> {
 pub fn download_embedding_model() -> Result<PathBuf> {
     let dir = global_models_dir().join("embeddings");
     std::fs::create_dir_all(&dir)?;
-    let client = reqwest::blocking::Client::builder()
+    let client = crate::http::blocking::Client::builder()
         .user_agent(format!("cki/{}", env!("CARGO_PKG_VERSION")))
         .timeout(std::time::Duration::from_secs(120))
         .build()?;
@@ -152,7 +152,7 @@ pub fn download_embedding_model() -> Result<PathBuf> {
     )
 }
 
-fn download_to(client: &reqwest::blocking::Client, url: &str, target: &Path) -> Result<()> {
+fn download_to(client: &crate::http::blocking::Client, url: &str, target: &Path) -> Result<()> {
     let mut response = client.get(url).send()?;
     if !response.status().is_success() {
         crate::error::bail!("HTTP {}", response.status());

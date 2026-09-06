@@ -229,7 +229,7 @@ pub async fn translate_pdf_cli(
     println!("  🌐 Idioma de destino: {}", target_lang);
     println!("{}\n", "─".repeat(70));
 
-    let client = reqwest::Client::new();
+    let client = crate::http::Client::new();
     let url = format!("{}/api/generate", ollama_host.trim_end_matches('/'));
     let mut full_translation = String::new();
     let mut cache = load_cli_cache();
@@ -311,7 +311,7 @@ pub async fn translate_pdf_cli(
             crate::error::bail!(
                 "Ollama retornou erro {}: {}",
                 response.status(),
-                response.text().await.unwrap_or_default()
+                response.text().unwrap_or_default()
             );
         }
 

@@ -12,6 +12,7 @@ mod app_server;
 mod bench;
 mod compressor;
 mod config;
+pub mod http;
 mod hw_recommend;
 mod llm;
 mod logger;
