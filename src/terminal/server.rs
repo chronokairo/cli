@@ -58,7 +58,7 @@ pub async fn serve(addr: &str, port: u16, argv: Vec<String>, cwd: PathBuf) -> an
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind((addr, port)).await?;
-    log::info!("terminal server listening on http://{addr}:{port}");
+    crate::cki_info!("terminal server listening on http://{addr}:{port}");
     axum::serve(listener, app).await?;
     Ok(())
 }
@@ -87,7 +87,7 @@ async fn session(socket: WebSocket, state: AppState) {
         Ok(s) => s,
         Err(e) => {
             let shell = super::shell::default_shell_command();
-            log::warn!(
+            crate::cki_warn!(
                 "failed to spawn {:?}: {e}, falling back to default shell {}",
                 state.argv,
                 shell
@@ -106,7 +106,7 @@ async fn session(socket: WebSocket, state: AppState) {
         }
     };
 
-    log::info!("terminal session started: {:?}", state.argv);
+    crate::cki_info!("terminal session started: {:?}", state.argv);
 
     // Forward output → browser.
     let (out_tx, mut out_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(64);
@@ -153,5 +153,5 @@ async fn session(socket: WebSocket, state: AppState) {
     }
 
     output_task.abort();
-    log::info!("terminal session closed");
+    crate::cki_info!("terminal session closed");
 }

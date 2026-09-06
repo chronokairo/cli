@@ -120,7 +120,7 @@ impl Tensor {
             GgmlType::Q6_K => dequantize_q6_k(&self.data, out, n),
             GgmlType::Q8_K => dequantize_q8_k(&self.data, out, n),
             _ => {
-                log::warn!("Unsupported type for dequantization: {:?}", self.ty);
+                crate::cki_warn!("Unsupported type for dequantization: {:?}", self.ty);
                 for o in out.iter_mut().take(n as usize) {
                     *o = 0.0;
                 }
@@ -215,7 +215,7 @@ impl Model {
             .and_then(|t| t.dims.get(1).copied())
             .unwrap_or(n_vocab);
 
-        log::info!(
+        crate::cki_info!(
             "Model: vocab={} embd={} head={} layers={} ff={} n_head_kv={}",
             n_vocab,
             n_embd,
@@ -224,7 +224,7 @@ impl Model {
             n_ff,
             n_head_kv
         );
-        log::info!("Loaded {} tensors", tensors.len());
+        crate::cki_info!("Loaded {} tensors", tensors.len());
 
         Ok(Model {
             n_vocab,

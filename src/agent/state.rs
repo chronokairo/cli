@@ -352,11 +352,11 @@ impl AgentState {
                         .long_memory
                         .store_vector(session_id, &workspace, content, &embedding)
                     {
-                        log::debug!("memory indexing store failed: {error}");
+                        crate::cki_debug!("memory indexing store failed: {error}");
                     }
                 }
                 Err(error) => {
-                    log::debug!("memory indexing embed failed: {error}");
+                    crate::cki_debug!("memory indexing embed failed: {error}");
                 }
             }
         }

@@ -296,7 +296,7 @@ fn scan_workspace(root: &Path, max_bytes: usize) -> anyhow::Result<BTreeMap<Path
         files: &mut BTreeMap<PathBuf, Vec<u8>>,
     ) -> anyhow::Result<()> {
         if started.elapsed() > *scan_budget {
-            log::warn!(
+            crate::cki_warn!(
                 "workspace snapshot scan exceeded {}s — skipping remaining files",
                 scan_budget.as_secs()
             );

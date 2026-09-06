@@ -72,7 +72,7 @@ impl Embedder {
             let model = Model::load(&path_str)?;
             let reader = GgufReader::load(&path_str)?;
             let tokenizer = Tokenizer::load_from_gguf(&reader)?;
-            log::info!("embedding model loaded from {}", path.display());
+            crate::cki_info!("embedding model loaded from {}", path.display());
             *guard = Some(InferenceEngine::new(model, tokenizer, *max_seq_len));
         }
         let engine = guard.as_mut().expect("engine loaded above");

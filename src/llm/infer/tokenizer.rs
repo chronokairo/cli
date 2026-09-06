@@ -44,7 +44,7 @@ impl Tokenizer {
         let eos_id = reader.get_metadata_int("tokenizer.ggml.eos_token_id", 2) as u32;
         let pad_id = reader.get_metadata_int("tokenizer.ggml.pad_token_id", 0) as u32;
 
-        log::info!(
+        crate::cki_info!(
             "Tokenizer: vocab_size={} bos={} eos={}",
             vocab.len(),
             bos_id,
@@ -71,7 +71,7 @@ impl Tokenizer {
                     }
                 }
             }
-            log::info!("  BPE merges: {}", merges.len());
+            crate::cki_info!("  BPE merges: {}", merges.len());
         }
 
         Ok(Tokenizer {

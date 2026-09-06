@@ -44,7 +44,7 @@ impl GpuContext {
             probe_gpu().ok_or_else(|| anyhow::anyhow!("No OpenCL GPU found"))?;
 
         let device_name: String = device.name().unwrap_or_default();
-        log::info!("GPU: {}", device_name);
+        crate::cki_info!("GPU: {}", device_name);
 
         let context = Context::builder()
             .platform(platform)
@@ -58,7 +58,7 @@ impl GpuContext {
             .build(&context)
             .map_err(|e| anyhow::anyhow!("OpenCL kernel compile error: {}", e))?;
 
-        log::info!("OpenCL kernels compiled successfully");
+        crate::cki_info!("OpenCL kernels compiled successfully");
 
         // Upload all weight tensors to GPU VRAM.
         let mut weights: HashMap<String, GpuBuf> = HashMap::new();
@@ -80,7 +80,7 @@ impl GpuContext {
                     | GgmlType::Q8_K
             );
             if !supported {
-                log::debug!(
+                crate::cki_debug!(
                     "GPU: skipping unsupported tensor {} ({:?})",
                     name,
                     tensor.ty
@@ -118,7 +118,7 @@ impl GpuContext {
             );
         }
 
-        log::info!(
+        crate::cki_info!(
             "GPU: uploaded {:.1} MB of weights ({} tensors)",
             total_bytes as f64 / 1_048_576.0,
             weights.len()

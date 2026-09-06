@@ -45,7 +45,7 @@ fn gemv(
         match ctx.gemv(name, &x[..cols], &mut out[..rows]) {
             Ok(true) => return,
             Ok(false) => {}
-            Err(e) => log::debug!("GPU GEMV failed for {}: {} — using CPU", name, e),
+            Err(e) => crate::cki_debug!("GPU GEMV failed for {}: {} — using CPU", name, e),
         }
     }
     // CPU path
@@ -297,14 +297,14 @@ impl InferenceEngine {
         {
             match super::gpu::GpuContext::new(&self.model) {
                 Ok(ctx) => {
-                    log::info!("GPU acceleration enabled");
+                    crate::cki_info!("GPU acceleration enabled");
                     self.gpu = Some(ctx);
                 }
-                Err(e) => log::warn!("GPU init failed (CPU fallback): {}", e),
+                Err(e) => crate::cki_warn!("GPU init failed (CPU fallback): {}", e),
             }
         }
         #[cfg(not(feature = "gpu"))]
-        log::warn!("Built without --features gpu; using CPU only");
+        crate::cki_warn!("Built without --features gpu; using CPU only");
     }
 
     pub fn gpu_active(&self) -> bool {

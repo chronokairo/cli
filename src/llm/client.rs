@@ -1151,7 +1151,7 @@ impl CloudClient {
                     429 => 2000u64 * 2u64.pow(attempt), // longer for rate limits
                     _ => 500u64 * 2u64.pow(attempt),
                 };
-                log::warn!(
+                crate::cki_warn!(
                     "cloud chat HTTP {status_code} (attempt {}/{}); retrying in {}ms",
                     attempt + 1,
                     MAX_RETRIES,

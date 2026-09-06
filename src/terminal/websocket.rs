@@ -32,7 +32,7 @@ async fn handle_terminal_socket(socket: WebSocket, manager: TerminalSessionManag
     let reader = match manager.create_session(&session_id, 120, 30, None) {
         Ok(reader) => reader,
         Err(err) => {
-            log::error!("Failed to create PTY session {session_id}: {err}");
+            crate::cki_error!("Failed to create PTY session {session_id}: {err}");
             return;
         }
     };

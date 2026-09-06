@@ -9,6 +9,7 @@ mod compressor;
 mod config;
 mod hw_recommend;
 mod llm;
+mod logger;
 mod mcp;
 mod memory;
 mod protocol;
@@ -34,53 +35,14 @@ use llm::infer::tokenizer::Tokenizer;
 use llm::model_resolver;
 use llm::router::{LlmRouter, DEFAULT_CLOUD_MODEL, DEFAULT_PROVIDER};
 use mcp::server::McpServer;
-use std::fs::{File, OpenOptions};
-use std::io::{IsTerminal, Write};
+use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
-use std::sync::{Arc, Mutex};
-
-/// Minimal logger that writes structured lines to `anamnesic.log` instead of
-/// stdout. Used by the TUI so `log::warn!` retry storms from the LLM client
-/// never interleave with the alternate screen and corrupt the UI.
-struct FileLogger {
-    file: Arc<Mutex<File>>,
-}
-
-impl log::Log for FileLogger {
-    fn enabled(&self, metadata: &log::Metadata) -> bool {
-        metadata.level() <= log::Level::Info
-    }
-
-    fn log(&self, record: &log::Record) {
-        if !self.enabled(record.metadata()) {
-            return;
-        }
-        if let Ok(mut f) = self.file.lock() {
-            let _ = writeln!(
-                f,
-                "{} [{}] {} - {}",
-                crate::types::time::now_local_iso_millis(),
-                record.level(),
-                record.target(),
-                record.args()
-            );
-        }
-    }
-
-    fn flush(&self) {}
-}
+use std::sync::Arc;
 
 fn init_file_logger() -> anyhow::Result<()> {
-    let file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open("anamnesic.log")?;
-    let logger = FileLogger {
-        file: Arc::new(Mutex::new(file)),
-    };
-    log::set_boxed_logger(Box::new(logger)).map_err(|e| anyhow::anyhow!("{e}"))?;
-    log::set_max_level(log::LevelFilter::Info);
+    logger::CkiLogger::init_file("anamnesic.log", logger::Level::Info)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
     Ok(())
 }
 
@@ -324,7 +286,7 @@ async fn main() -> Result<()> {
     if tui_mode || protocol_mode {
         init_file_logger()?;
     } else {
-        simple_logger::init_with_level(log::Level::Info).ok();
+        logger::CkiLogger::init_stderr(logger::Level::Info);
     }
     providers::load_dotenv();
     llm::infer::ops::init_thread_pool();

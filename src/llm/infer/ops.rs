@@ -11,7 +11,7 @@ pub fn init_thread_pool() {
     let _ = rayon::ThreadPoolBuilder::new()
         .num_threads(threads)
         .build_global();
-    log::info!("CPU thread pool: {threads} threads (of {total} logical cores)");
+    crate::cki_info!("CPU thread pool: {threads} threads (of {total} logical cores)");
 }
 
 pub fn rms_norm(out: &mut [f32], x: &[f32], weight: &[f32], n: usize, rows: usize, eps: f32) {

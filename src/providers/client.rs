@@ -22,7 +22,7 @@ impl ModelsDevClient {
         match fetch_and_cache(&cache) {
             Ok(c) => Self { catalog: c },
             Err(e) => {
-                log::warn!("models.dev: fetch failed ({e}); using empty catalog");
+                crate::cki_warn!("models.dev: fetch failed ({e}); using empty catalog");
                 Self {
                     catalog: Catalog::new(),
                 }
@@ -225,7 +225,7 @@ fn try_load_cache(path: &PathBuf) -> Option<Catalog> {
 }
 
 fn fetch_and_cache(cache: &PathBuf) -> Result<Catalog> {
-    log::info!("models.dev: fetching catalog from {API_URL}");
+    crate::cki_info!("models.dev: fetching catalog from {API_URL}");
     // models.dev rejects requests without a browser-like User-Agent (HTTP 403).
     let resp = reqwest::blocking::Client::builder()
         .user_agent(format!("cki/{}", env!("CARGO_PKG_VERSION")))
