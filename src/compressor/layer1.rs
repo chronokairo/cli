@@ -164,23 +164,11 @@ fn template_dedup(input: &str) -> String {
 
 fn normalize_template(line: &str) -> String {
     let mut s = line.to_string();
-    s = regex_replace(&s, r"\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}", "<TS>");
-    s = regex_replace(
-        &s,
-        r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b",
-        "<UUID>",
-    );
-    s = regex_replace(&s, r"\b0x[0-9a-fA-F]{6,}\b", "<HEX>");
-    s = regex_replace(&s, r"\b\d{3,}\b", "<N>");
+    s = super::helpers::replace_timestamps(&s);
+    s = super::helpers::replace_uuids(&s);
+    s = super::helpers::replace_hex_literals(&s);
+    s = super::helpers::replace_numbers(&s);
     s
-}
-
-fn regex_replace(s: &str, pattern: &str, replacement: &str) -> String {
-    if let Ok(re) = regex::Regex::new(pattern) {
-        re.replace_all(s, replacement).to_string()
-    } else {
-        s.to_string()
-    }
 }
 
 fn filter_stack_frames(input: &str) -> String {
@@ -292,38 +280,17 @@ fn factor_common_prefix(input: &str) -> String {
 }
 
 fn shorten_paths(input: &str) -> String {
-    let re = regex::Regex::new(r#""([^"]{40,})"#).ok();
     input
         .lines()
-        .map(|line| {
-            if let Some(ref re) = re {
-                let replaced = re.replace_all(line, |caps: &regex::Captures| {
-                    let path = &caps[1];
-                    let segments: Vec<&str> = path.split('/').collect();
-                    if segments.len() > 3 {
-                        format!("\"{}", segments[segments.len() - 3..].join("/"))
-                    } else {
-                        format!("\"{}", path)
-                    }
-                });
-                replaced.to_string()
-            } else {
-                line.to_string()
-            }
-        })
+        .map(|line| super::helpers::shorten_quoted_paths(line, 40))
         .collect::<Vec<_>>()
         .join("\n")
 }
 
 fn normalize_tokens(input: &str) -> String {
     let mut s = input.to_string();
-    s = regex_replace(&s, r"\b[0-9a-fA-F]{64}\b", "<SHA256>");
-    s = regex_replace(&s, r"\be?[0-9a-fA-F]{32,}\b", "<HASH>");
-    s = regex_replace(
-        &s,
-        r"\beyJ[A-Za-z0-9_-]{10,}\.(?:[A-Za-z0-9_-]{10,}\.)[A-Za-z0-9_-]{10,}\b",
-        "<JWT>",
-    );
+    s = super::helpers::replace_hashes_and_sha(&s);
+    s = super::helpers::replace_jwts(&s);
     s
 }
 

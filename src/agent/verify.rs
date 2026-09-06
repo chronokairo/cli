@@ -98,11 +98,10 @@ impl VerificationGate {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::settings::Config;
 
     #[test]
     fn test_verification_gate_budget() {
-        let mut gate = VerificationGate::new(2, false);
+        let gate = VerificationGate::new(2, false);
         assert_eq!(gate.current_repair_count, 0);
         assert_eq!(gate.max_repair_budget, 2);
     }

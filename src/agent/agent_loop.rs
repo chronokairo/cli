@@ -1918,9 +1918,7 @@ fn search_workspace_without_rg(root: &std::path::Path, pattern: &str) -> String 
     const MAX_FILE_SIZE: u64 = 1_000_000;
     const SKIPPED_DIRS: &[&str] = &[".git", "target", "node_modules", "memory_data"];
 
-    let matcher = regex::Regex::new(pattern)
-        .or_else(|_| regex::Regex::new(&regex::escape(pattern)))
-        .expect("escaped text is a valid regex");
+    let pattern_lower = pattern.to_lowercase();
     let mut directories = vec![root.to_path_buf()];
     let mut matches = Vec::new();
 
@@ -1955,7 +1953,7 @@ fn search_workspace_without_rg(root: &std::path::Path, pattern: &str) -> String 
                 continue;
             };
             for (line_index, line) in content.lines().enumerate() {
-                if matcher.is_match(line) {
+                if line.contains(pattern) || line.to_lowercase().contains(&pattern_lower) {
                     let relative = path.strip_prefix(root).unwrap_or(&path);
                     let rel_str = relative.display().to_string().replace('\\', "/");
                     matches.push(format!("{}:{}:{}", rel_str, line_index + 1, line));

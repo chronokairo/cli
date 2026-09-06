@@ -57,35 +57,14 @@ fn estimate_tokens(input: &str) -> usize {
 
 fn normalize_opaque_tokens(input: &str) -> String {
     let mut s = input.to_string();
-    if let Ok(re) =
-        regex::Regex::new(r"\beyJ[A-Za-z0-9_-]{10,}\.(?:[A-Za-z0-9_-]{10,}\.)[A-Za-z0-9_-]{10,}\b")
-    {
-        s = re.replace_all(&s, "<JWT>").to_string();
-    }
-    if let Ok(re) = regex::Regex::new(r"\b[0-9a-fA-F]{40,}\b") {
-        s = re.replace_all(&s, "<HASH>").to_string();
-    }
-    if let Ok(re) = regex::Regex::new(r"(?i)(https?://)[^\s]+") {
-        s = re.replace_all(&s, "$1<URL>").to_string();
-    }
+    s = super::helpers::replace_jwts(&s);
+    s = super::helpers::replace_opaque_hashes(&s);
+    s = super::helpers::replace_urls(&s);
     s
 }
 
 fn shorten_paths_l2(input: &str) -> String {
-    if let Ok(re) = regex::Regex::new(r#""([^"]{30,})"#) {
-        re.replace_all(input, |caps: &regex::Captures| {
-            let path = &caps[1];
-            let segments: Vec<&str> = path.split('/').collect();
-            if segments.len() > 3 {
-                format!("\"{}", segments[segments.len() - 3..].join("/"))
-            } else {
-                format!("\"{}", path)
-            }
-        })
-        .to_string()
-    } else {
-        input.to_string()
-    }
+    super::helpers::shorten_quoted_paths(input, 30)
 }
 
 fn collapse_whitespace(input: &str) -> String {

@@ -110,41 +110,59 @@ fn duckduckgo_search(
 /// Extract DuckDuckGo HTML results (`result__a` title links + `result__snippet`
 /// summaries) with lightweight regex parsing — no HTML dependency needed.
 fn parse_ddg_results(html: &str, max_results: usize) -> Vec<String> {
-    let anchor_re =
-        regex::Regex::new(r#"class="[^"]*result__a[^"]*" href="([^"]+)"[^>]*>(.*?)</a>"#)
-            .expect("valid anchor regex");
-    let snippet_re = regex::Regex::new(r#"class="result__snippet"[^>]*>(.*?)</a>"#)
-        .expect("valid snippet regex");
-    let strip = regex::Regex::new(r"<[^>]+>").expect("valid strip regex");
-    let anchors: Vec<(String, String)> = anchor_re
-        .captures_iter(html)
-        .map(|cap| {
-            let href = html_unescape(&cap[1]);
-            let title = strip
-                .replace_all(&html_unescape(&cap[2]), "")
-                .trim()
-                .to_string();
-            (href, title)
-        })
-        .collect();
-    let snippets: Vec<String> = snippet_re
-        .captures_iter(html)
-        .map(|cap| {
-            strip
-                .replace_all(&html_unescape(&cap[1]), "")
-                .trim()
-                .to_string()
-        })
-        .collect();
-    anchors
-        .into_iter()
-        .take(max_results)
-        .enumerate()
-        .map(|(index, (href, title))| {
-            let snippet = snippets.get(index).cloned().unwrap_or_default();
-            format!("{title}\n{href}\n{snippet}")
-        })
-        .collect()
+    let mut results = Vec::new();
+    let mut cursor = 0;
+
+    while let Some(anchor_start) = html[cursor..].find("result__a") {
+        let abs_anchor = cursor + anchor_start;
+        // Find href
+        let Some(href_start_rel) = html[abs_anchor..].find("href=\"") else { break; };
+        let href_val_start = abs_anchor + href_start_rel + 6;
+        let Some(href_val_end_rel) = html[href_val_start..].find('"') else { break; };
+        let href = html_unescape(&html[href_val_start..href_val_start + href_val_end_rel]);
+
+        // Find closing > of anchor tag
+        let Some(tag_close_rel) = html[href_val_start + href_val_end_rel..].find('>') else { break; };
+        let content_start = href_val_start + href_val_end_rel + tag_close_rel + 1;
+        let Some(tag_end_rel) = html[content_start..].find("</a>") else { break; };
+        let title = strip_tags(&html_unescape(&html[content_start..content_start + tag_end_rel]));
+
+        // Search snippet
+        let mut snippet = String::new();
+        if let Some(snip_start_rel) = html[content_start + tag_end_rel..].find("result__snippet") {
+            let snip_abs = content_start + tag_end_rel + snip_start_rel;
+            if let Some(snip_open_rel) = html[snip_abs..].find('>') {
+                let snip_content_start = snip_abs + snip_open_rel + 1;
+                if let Some(snip_close_rel) = html[snip_content_start..].find("</a>") {
+                    snippet = strip_tags(&html_unescape(&html[snip_content_start..snip_content_start + snip_close_rel]));
+                }
+            }
+        }
+
+        results.push(format!("{title}\n{href}\n{snippet}"));
+        if results.len() >= max_results {
+            break;
+        }
+
+        cursor = content_start + tag_end_rel + 4;
+    }
+
+    results
+}
+
+fn strip_tags(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut inside_tag = false;
+    for c in input.chars() {
+        if c == '<' {
+            inside_tag = true;
+        } else if c == '>' {
+            inside_tag = false;
+        } else if !inside_tag {
+            out.push(c);
+        }
+    }
+    out.trim().to_string()
 }
 
 fn html_unescape(text: &str) -> String {
@@ -157,14 +175,54 @@ fn html_unescape(text: &str) -> String {
 }
 
 fn strip_html(html: &str) -> String {
-    let strip_tags = regex::Regex::new(r"<[^>]+>").expect("valid tag regex");
-    let strip_scripts = regex::Regex::new(r"(?is)<script.*?</script>|<style.*?</style>")
-        .expect("valid block regex");
-    let whitespace = regex::Regex::new(r"[ \t\r\f\v]{2,}").expect("valid whitespace regex");
-    let no_blocks = strip_scripts.replace_all(html, " ");
-    let text = strip_tags.replace_all(&no_blocks, " ");
-    let text = whitespace.replace_all(&text, " ");
-    text.trim().to_string()
+    let mut out = String::with_capacity(html.len());
+    let mut in_script_or_style = false;
+    let mut chars = html.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        if c == '<' {
+            let mut tag_name = String::new();
+            let mut tag_chars = Vec::new();
+            while let Some(&nc) = chars.peek() {
+                chars.next();
+                if nc == '>' {
+                    break;
+                }
+                tag_chars.push(nc);
+                if !nc.is_ascii_whitespace() && tag_name.len() < 10 {
+                    tag_name.push(nc.to_ascii_lowercase());
+                }
+            }
+
+            if tag_name.starts_with("script") || tag_name.starts_with("style") {
+                in_script_or_style = true;
+            } else if tag_name.starts_with("/script") || tag_name.starts_with("/style") {
+                in_script_or_style = false;
+            }
+            out.push(' ');
+            continue;
+        }
+
+        if !in_script_or_style {
+            out.push(c);
+        }
+    }
+
+    // Collapse whitespace
+    let mut clean = String::with_capacity(out.len());
+    let mut last_was_ws = false;
+    for c in out.chars() {
+        if c.is_ascii_whitespace() {
+            if !last_was_ws {
+                clean.push(' ');
+                last_was_ws = true;
+            }
+        } else {
+            clean.push(c);
+            last_was_ws = false;
+        }
+    }
+    clean.trim().to_string()
 }
 
 fn truncate_chars(text: &str, max_bytes: usize) -> String {

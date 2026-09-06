@@ -1,4 +1,3 @@
-use regex::Regex;
 use std::path::Path;
 
 #[derive(Debug, Clone)]
@@ -141,73 +140,138 @@ impl RepoMapGenerator {
         }
     }
 
-    fn extract_symbols_from_file(path: &Path, rel_path: &str, symbols: &mut Vec<SymbolEntry>) {
-        let Ok(content) = std::fs::read_to_string(path) else {
+    fn extract_symbols_from_file(_path: &Path, rel_path: &str, symbols: &mut Vec<SymbolEntry>) {
+        let Ok(content) = std::fs::read_to_string(_path) else {
             return;
         };
 
-        let fn_re = Regex::new(r"^\s*(pub\s+|async\s+)*fn\s+([a-zA-Z0-9_]+)").unwrap();
-        let struct_re =
-            Regex::new(r"^\s*(pub\s+)*(struct|enum|trait|type|union)\s+([a-zA-Z0-9_]+)").unwrap();
-        let py_fn_re = Regex::new(r"^\s*(async\s+)?def\s+([a-zA-Z0-9_]+)").unwrap();
-        let py_class_re = Regex::new(r"^\s*class\s+([a-zA-Z0-9_]+)").unwrap();
-        let js_fn_re =
-            Regex::new(r"^\s*(export\s+)?(async\s+)?function\s+([a-zA-Z0-9_]+)").unwrap();
-        let js_class_re = Regex::new(r"^\s*(export\s+)?class\s+([a-zA-Z0-9_]+)").unwrap();
-
         for (line_idx, line) in content.lines().enumerate() {
             let line_num = line_idx + 1;
+            let trimmed = line.trim_start();
             if rel_path.ends_with(".rs") {
-                if let Some(caps) = fn_re.captures(line) {
-                    symbols.push(SymbolEntry {
-                        file_path: rel_path.to_string(),
-                        symbol_type: "fn",
-                        name: caps[2].to_string(),
-                        line_number: line_num,
-                    });
-                } else if let Some(caps) = struct_re.captures(line) {
-                    symbols.push(SymbolEntry {
-                        file_path: rel_path.to_string(),
-                        symbol_type: "type",
-                        name: format!("{} {}", &caps[2], &caps[3]),
-                        line_number: line_num,
-                    });
+                // Parse fn definitions
+                let mut rest = trimmed;
+                if rest.starts_with("pub ") {
+                    rest = rest["pub ".len()..].trim_start();
+                } else if rest.starts_with("pub(crate) ") {
+                    rest = rest["pub(crate) ".len()..].trim_start();
+                }
+                if rest.starts_with("async ") {
+                    rest = rest["async ".len()..].trim_start();
+                }
+                if rest.starts_with("fn ") {
+                    let fn_name_part = rest["fn ".len()..].trim_start();
+                    let fn_name: String = fn_name_part
+                        .chars()
+                        .take_while(|c| c.is_alphanumeric() || *c == '_')
+                        .collect();
+                    if !fn_name.is_empty() {
+                        symbols.push(SymbolEntry {
+                            file_path: rel_path.to_string(),
+                            symbol_type: "fn",
+                            name: fn_name,
+                            line_number: line_num,
+                        });
+                        continue;
+                    }
+                }
+                // Parse struct, enum, trait, type, union
+                for kw in &["struct", "enum", "trait", "type", "union"] {
+                    let prefix = format!("{} ", kw);
+                    if rest.starts_with(&prefix) {
+                        let type_name_part = rest[prefix.len()..].trim_start();
+                        let type_name: String = type_name_part
+                            .chars()
+                            .take_while(|c| c.is_alphanumeric() || *c == '_')
+                            .collect();
+                        if !type_name.is_empty() {
+                            symbols.push(SymbolEntry {
+                                file_path: rel_path.to_string(),
+                                symbol_type: "type",
+                                name: format!("{} {}", kw, type_name),
+                                line_number: line_num,
+                            });
+                            break;
+                        }
+                    }
                 }
             } else if rel_path.ends_with(".py") {
-                if let Some(caps) = py_fn_re.captures(line) {
-                    symbols.push(SymbolEntry {
-                        file_path: rel_path.to_string(),
-                        symbol_type: "def",
-                        name: caps[2].to_string(),
-                        line_number: line_num,
-                    });
-                } else if let Some(caps) = py_class_re.captures(line) {
-                    symbols.push(SymbolEntry {
-                        file_path: rel_path.to_string(),
-                        symbol_type: "class",
-                        name: caps[1].to_string(),
-                        line_number: line_num,
-                    });
+                let mut rest = trimmed;
+                if rest.starts_with("async ") {
+                    rest = rest["async ".len()..].trim_start();
+                }
+                if rest.starts_with("def ") {
+                    let def_part = rest["def ".len()..].trim_start();
+                    let def_name: String = def_part
+                        .chars()
+                        .take_while(|c| c.is_alphanumeric() || *c == '_')
+                        .collect();
+                    if !def_name.is_empty() {
+                        symbols.push(SymbolEntry {
+                            file_path: rel_path.to_string(),
+                            symbol_type: "def",
+                            name: def_name,
+                            line_number: line_num,
+                        });
+                    }
+                } else if rest.starts_with("class ") {
+                    let cls_part = rest["class ".len()..].trim_start();
+                    let cls_name: String = cls_part
+                        .chars()
+                        .take_while(|c| c.is_alphanumeric() || *c == '_')
+                        .collect();
+                    if !cls_name.is_empty() {
+                        symbols.push(SymbolEntry {
+                            file_path: rel_path.to_string(),
+                            symbol_type: "class",
+                            name: cls_name,
+                            line_number: line_num,
+                        });
+                    }
                 }
             } else if rel_path.ends_with(".js")
                 || rel_path.ends_with(".ts")
                 || rel_path.ends_with(".tsx")
                 || rel_path.ends_with(".jsx")
             {
-                if let Some(caps) = js_fn_re.captures(line) {
-                    symbols.push(SymbolEntry {
-                        file_path: rel_path.to_string(),
-                        symbol_type: "function",
-                        name: caps[3].to_string(),
-                        line_number: line_num,
-                    });
-                } else if let Some(caps) = js_class_re.captures(line) {
-                    symbols.push(SymbolEntry {
-                        file_path: rel_path.to_string(),
-                        symbol_type: "class",
-                        name: caps[2].to_string(),
-                        line_number: line_num,
-                    });
+                let mut rest = trimmed;
+                if rest.starts_with("export ") {
+                    rest = rest["export ".len()..].trim_start();
+                }
+                if rest.starts_with("default ") {
+                    rest = rest["default ".len()..].trim_start();
+                }
+                if rest.starts_with("async ") {
+                    rest = rest["async ".len()..].trim_start();
+                }
+                if rest.starts_with("function ") {
+                    let fn_part = rest["function ".len()..].trim_start();
+                    let fn_name: String = fn_part
+                        .chars()
+                        .take_while(|c| c.is_alphanumeric() || *c == '_')
+                        .collect();
+                    if !fn_name.is_empty() {
+                        symbols.push(SymbolEntry {
+                            file_path: rel_path.to_string(),
+                            symbol_type: "function",
+                            name: fn_name,
+                            line_number: line_num,
+                        });
+                    }
+                } else if rest.starts_with("class ") {
+                    let cls_part = rest["class ".len()..].trim_start();
+                    let cls_name: String = cls_part
+                        .chars()
+                        .take_while(|c| c.is_alphanumeric() || *c == '_')
+                        .collect();
+                    if !cls_name.is_empty() {
+                        symbols.push(SymbolEntry {
+                            file_path: rel_path.to_string(),
+                            symbol_type: "class",
+                            name: cls_name,
+                            line_number: line_num,
+                        });
+                    }
                 }
             }
         }
