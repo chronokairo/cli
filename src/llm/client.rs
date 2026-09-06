@@ -365,7 +365,7 @@ impl LlmClient {
                     last_err = Some(e);
                     if attempt < 2 {
                         let backoff = std::time::Duration::from_millis(500 * (1 << attempt));
-                        tokio::time::sleep(backoff).await;
+                        crate::async_rt::time::sleep(backoff).await;
                     }
                 }
             }
@@ -1153,7 +1153,7 @@ impl CloudClient {
                     MAX_RETRIES,
                     backoff_ms
                 );
-                tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
+                crate::async_rt::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
                 last_err = Some(crate::error::anyhow!("cloud chat: HTTP {status} {text}"));
                 continue;
             }
@@ -1586,99 +1586,107 @@ mod tests {
         assert_eq!(v["tools"][0]["function"]["name"], "run_command");
     }
 
-    #[tokio::test]
-    async fn stream_chat_meta_parses_sse_content_deltas() {
-        let mock = SseFixture::start("data: {\"choices\":[{\"delta\":{\"content\":\"Hello\"}}]}\r\ndata: [DONE]\r\n");
+    #[test]
+    fn stream_chat_meta_parses_sse_content_deltas() {
+        crate::async_rt::block_on(async {
+            let mock = SseFixture::start("data: {\"choices\":[{\"delta\":{\"content\":\"Hello\"}}]}\r\ndata: [DONE]\r\n");
 
-        let client = CloudClient::new(&mock.uri(), "k");
-        let mut tokens = Vec::new();
-        let result = client
-            .stream_chat_meta(
-                "glm-5.2",
-                vec![serde_json::json!({"role": "user", "content": "hi"})],
-                None,
-                None,
-                None,
-                &mut |t| tokens.push(t.to_string()),
-                None,
-            )
-            .await;
+            let client = CloudClient::new(&mock.uri(), "k");
+            let mut tokens = Vec::new();
+            let result = client
+                .stream_chat_meta(
+                    "glm-5.2",
+                    vec![serde_json::json!({"role": "user", "content": "hi"})],
+                    None,
+                    None,
+                    None,
+                    &mut |t| tokens.push(t.to_string()),
+                    None,
+                )
+                .await;
 
-        assert!(result.is_ok());
-        let completion = result.unwrap();
-        assert_eq!(completion.content, "Hello");
-        assert_eq!(tokens, vec!["Hello"]);
+            assert!(result.is_ok());
+            let completion = result.unwrap();
+            assert_eq!(completion.content, "Hello");
+            assert_eq!(tokens, vec!["Hello"]);
+        });
     }
 
-    #[tokio::test]
-    async fn stream_chat_meta_parses_sse_tool_call_deltas() {
-        let mock = SseFixture::start("data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\\\"src/lib.rs\\\"}\"}}]}}]}\r\ndata: [DONE]\r\n");
+    #[test]
+    fn stream_chat_meta_parses_sse_tool_call_deltas() {
+        crate::async_rt::block_on(async {
+            let mock = SseFixture::start("data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\\\"src/lib.rs\\\"}\"}}]}}]}\r\ndata: [DONE]\r\n");
 
-        let client = CloudClient::new(&mock.uri(), "k");
-        let mut tokens = Vec::new();
-        let result = client
-            .stream_chat_meta(
-                "glm-5.2",
-                vec![serde_json::json!({"role": "user", "content": "hi"})],
-                None,
-                None,
-                None,
-                &mut |t| tokens.push(t.to_string()),
-                None,
-            )
-            .await;
+            let client = CloudClient::new(&mock.uri(), "k");
+            let mut tokens = Vec::new();
+            let result = client
+                .stream_chat_meta(
+                    "glm-5.2",
+                    vec![serde_json::json!({"role": "user", "content": "hi"})],
+                    None,
+                    None,
+                    None,
+                    &mut |t| tokens.push(t.to_string()),
+                    None,
+                )
+                .await;
 
-        assert!(result.is_ok());
-        let completion = result.unwrap();
-        assert!(completion.content.is_empty());
-        assert!(tokens.is_empty());
+            assert!(result.is_ok());
+            let completion = result.unwrap();
+            assert!(completion.content.is_empty());
+            assert!(tokens.is_empty());
+        });
     }
 
-    #[tokio::test]
-    async fn stream_chat_meta_returns_usage_from_sse() {
-        let mock = SseFixture::start("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5,\"total_tokens\":15}}\r\ndata: [DONE]\r\n");
+    #[test]
+    fn stream_chat_meta_returns_usage_from_sse() {
+        crate::async_rt::block_on(async {
+            let mock = SseFixture::start("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5,\"total_tokens\":15}}\r\ndata: [DONE]\r\n");
 
-        let client = CloudClient::new(&mock.uri(), "k");
-        let mut tokens = Vec::new();
-        let result = client
-            .stream_chat_meta(
-                "glm-5.2",
-                vec![serde_json::json!({"role": "user", "content": "hi"})],
-                None,
-                None,
-                None,
-                &mut |t| tokens.push(t.to_string()),
-                None,
-            )
-            .await;
+            let client = CloudClient::new(&mock.uri(), "k");
+            let mut tokens = Vec::new();
+            let result = client
+                .stream_chat_meta(
+                    "glm-5.2",
+                    vec![serde_json::json!({"role": "user", "content": "hi"})],
+                    None,
+                    None,
+                    None,
+                    &mut |t| tokens.push(t.to_string()),
+                    None,
+                )
+                .await;
 
-        assert!(result.is_ok());
-        let completion = result.unwrap();
-        assert_eq!(completion.content, "ok");
-        assert_eq!(tokens, vec!["ok"]);
+            assert!(result.is_ok());
+            let completion = result.unwrap();
+            assert_eq!(completion.content, "ok");
+            assert_eq!(tokens, vec!["ok"]);
+        });
     }
 
-    #[tokio::test]
-    async fn stream_chat_meta_emits_token_usage_event() {
-        let mock = SseFixture::start("data: {\"choices\":[{\"delta\":{\"content\":\"done\"}}],\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":50,\"total_tokens\":150}}\r\ndata: [DONE]\r\n");
+    #[test]
+    fn stream_chat_meta_emits_token_usage_event() {
+        crate::async_rt::block_on(async {
+            let mock = SseFixture::start("data: {\"choices\":[{\"delta\":{\"content\":\"done\"}}],\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":50,\"total_tokens\":150}}\r\ndata: [DONE]\r\n");
 
-        let client = CloudClient::new(&mock.uri(), "k");
-        let mut tokens = Vec::new();
-        let result = client
-            .stream_chat_meta(
-                "glm-5.2",
-                vec![serde_json::json!({"role": "user", "content": "hi"})],
-                None,
-                None,
-                None,
-                &mut |t| tokens.push(t.to_string()),
-                None,
-            )
-            .await;
+            let client = CloudClient::new(&mock.uri(), "k");
+            let mut tokens = Vec::new();
+            let result = client
+                .stream_chat_meta(
+                    "glm-5.2",
+                    vec![serde_json::json!({"role": "user", "content": "hi"})],
+                    None,
+                    None,
+                    None,
+                    &mut |t| tokens.push(t.to_string()),
+                    None,
+                )
+                .await;
 
-        assert!(result.is_ok());
-        let completion = result.unwrap();
-        assert_eq!(completion.content, "done");
+            assert!(result.is_ok());
+            let completion = result.unwrap();
+            assert_eq!(completion.content, "done");
+        });
     }
 
     /// One-request loopback server for exercising the real HTTP/SSE client.

@@ -14,8 +14,8 @@ use super::ws::{compute_accept, WsMessage, WsStream};
 use serde::Deserialize;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::{TcpListener, TcpStream};
+use crate::async_rt::io::{AsyncReadExt, AsyncWriteExt};
+use crate::async_rt::net::{TcpListener, TcpStream};
 
 const INDEX_HTML: &str = include_str!("index.html");
 
@@ -56,7 +56,7 @@ pub async fn serve(addr: &str, port: u16, argv: Vec<String>, cwd: PathBuf) -> cr
         };
 
         let state = state.clone();
-        tokio::spawn(async move {
+        crate::async_rt::task::spawn(async move {
             if let Err(err) = handle_connection(stream, state).await {
                 crate::cki_debug!("connection from {peer_addr} closed: {err}");
             }
@@ -164,16 +164,16 @@ async fn session(mut socket: WsStream<TcpStream>, state: AppState) {
 
     crate::cki_info!("terminal session started: {:?}", state.argv);
 
-    let (out_tx, mut out_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(64);
+    let (out_tx, mut out_rx) = crate::async_rt::sync::mpsc::channel::<Vec<u8>>(64);
     let session_out = session.clone_read_handle();
-    let output_task = tokio::spawn(async move {
+    let output_task = crate::async_rt::task::spawn(async move {
         loop {
             let data = session_out.read_available();
             if data.is_empty() {
                 if out_tx.is_closed() {
                     break;
                 }
-                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                crate::async_rt::time::sleep(std::time::Duration::from_millis(10)).await;
                 continue;
             }
             if out_tx.send(data).await.is_err() {
@@ -183,10 +183,15 @@ async fn session(mut socket: WsStream<TcpStream>, state: AppState) {
     });
 
     loop {
-        tokio::select! {
-            Some(data) = out_rx.recv() => {
-                if socket.send_binary(&data).await.is_err() {
-                    break;
+        crate::select! {
+            data_opt = out_rx.recv() => {
+                match data_opt {
+                    Some(data) => {
+                        if socket.send_binary(&data).await.is_err() {
+                            break;
+                        }
+                    }
+                    None => break,
                 }
             }
             msg = socket.recv() => match msg {

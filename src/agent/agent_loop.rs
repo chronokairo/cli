@@ -599,7 +599,7 @@ async fn run_tool_use_iteration(
         let tool_list = tools.to_vec();
         let mut stream_token = |token: &str| hooks.text_delta(token);
         let mut stream_reasoning = |token: &str| hooks.reasoning_delta(token);
-        let completion = tokio::select! {
+        let completion = crate::select! {
             res = client.chat_meta_stream_with_fallback(
                 model,
                 conversation.clone(),
@@ -621,7 +621,7 @@ async fn run_tool_use_iteration(
                     if hooks.interrupted() {
                         break;
                     }
-                    tokio::time::sleep(std::time::Duration::from_millis(15)).await;
+                    crate::async_rt::time::sleep(std::time::Duration::from_millis(15)).await;
                 }
             } => {
                 let _ = state.refresh_workspace_diff();
@@ -1604,7 +1604,7 @@ fn execute_tool(
                 let config = state.config.clone();
                 let sub_approval = hooks.on_approval.clone();
                 thread::spawn(move || {
-                    let rt = match tokio::runtime::Runtime::new() {
+                    let rt = match crate::async_rt::runtime::Runtime::new() {
                         Ok(rt) => rt,
                         Err(error) => {
                             if let Some(tx) = tx.lock().unwrap().take() {

@@ -41,7 +41,7 @@ pub struct AppServer {
     session: Arc<Session>,
     workspace: std::path::PathBuf,
     model: String,
-    pending_requests: Arc<Mutex<HashMap<u64, tokio::sync::oneshot::Sender<Value>>>>,
+    pending_requests: Arc<Mutex<HashMap<u64, crate::async_rt::sync::oneshot::Sender<Value>>>>,
     next_request_id: Arc<Mutex<u64>>,
 }
 

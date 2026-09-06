@@ -16,7 +16,7 @@ pub async fn benchmark_cloud_model(
     let chain = build_cloud_chain(api_key, model_id, rpm);
     let t0 = Instant::now();
 
-    let result = tokio::time::timeout(
+    let result = crate::async_rt::time::timeout(
         std::time::Duration::from_secs(CLOUD_BENCH_TIMEOUT_SECS),
         chain.complete(CLOUD_BENCH_PROMPT),
     )

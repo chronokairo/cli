@@ -258,7 +258,7 @@ impl LlmRouter {
         let start = std::time::Instant::now();
         let timeout_duration = std::time::Duration::from_secs(4);
 
-        tokio::time::timeout(timeout_duration, client.generate(&api_id, "Hi", None, None))
+        crate::async_rt::time::timeout(timeout_duration, client.generate(&api_id, "Hi", None, None))
             .await
             .map_err(|_| crate::error::anyhow!("Timeout probing model '{model}'"))?
             .map_err(|e| crate::error::anyhow!("Probe failed for model '{model}': {e}"))?;
@@ -732,14 +732,16 @@ mod tests {
         // No same-tier model in test catalog, so fallback should remain None or unchanged.
     }
 
-    #[tokio::test]
-    async fn select_best_available_model_returns_first_if_probes_fail() {
-        let r = router();
-        let candidates = vec![
-            "nvidia/unknown-a".to_string(),
-            "nvidia/unknown-b".to_string(),
-        ];
-        let (selected, _) = r.select_best_available_model(&candidates).await.unwrap();
-        assert_eq!(selected, "nvidia/unknown-a");
+    #[test]
+    fn select_best_available_model_returns_first_if_probes_fail() {
+        crate::async_rt::block_on(async {
+            let r = router();
+            let candidates = vec![
+                "nvidia/unknown-a".to_string(),
+                "nvidia/unknown-b".to_string(),
+            ];
+            let (selected, _) = r.select_best_available_model(&candidates).await.unwrap();
+            assert_eq!(selected, "nvidia/unknown-a");
+        });
     }
 }

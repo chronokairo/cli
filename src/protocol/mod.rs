@@ -217,7 +217,7 @@ impl Session {
         let event_tx_for_session = event_tx.clone();
 
         let handle = thread::spawn(move || {
-            let runtime = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime");
+            let runtime = crate::async_rt::runtime::Runtime::new().expect("Failed to create runtime");
             runtime.block_on(async {
                 loop {
                     match op_rx.recv() {

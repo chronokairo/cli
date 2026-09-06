@@ -7,7 +7,7 @@ pub struct Response {
     pub status: StatusCode,
     pub headers: HashMap<String, String>,
     pub body: Vec<u8>,
-    pub stream_rx: Option<tokio::sync::mpsc::Receiver<Vec<u8>>>,
+    pub stream_rx: Option<crate::async_rt::sync::mpsc::Receiver<Vec<u8>>>,
 }
 
 impl Response {

@@ -5,7 +5,7 @@ use super::status::StatusCode;
 use super::url::Url;
 use std::collections::HashMap;
 use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use crate::async_rt::io::{AsyncReadExt, AsyncWriteExt};
 
 #[derive(Clone, Default)]
 pub struct ClientBuilder {
@@ -132,8 +132,8 @@ impl RequestBuilder {
         timeout: Duration,
     ) -> crate::error::Result<Response> {
         let addr = format!("{}:{}", url.host(), url.port());
-        let connect_fut = tokio::net::TcpStream::connect(&addr);
-        let mut stream = tokio::time::timeout(timeout, connect_fut)
+        let connect_fut = crate::async_rt::net::TcpStream::connect(&addr);
+        let mut stream = crate::async_rt::time::timeout(timeout, connect_fut)
             .await
             .map_err(|_| crate::error::message("connection timed out"))??;
 
@@ -189,8 +189,8 @@ impl RequestBuilder {
             .unwrap_or(false);
 
         if is_event_stream {
-            let (tx, rx) = tokio::sync::mpsc::channel::<Vec<u8>>(128);
-            tokio::spawn(async move {
+            let (tx, rx) = crate::async_rt::sync::mpsc::channel::<Vec<u8>>(128);
+            crate::async_rt::task::spawn(async move {
                 let mut buf = [0u8; 4096];
                 loop {
                     match stream.read(&mut buf).await {
@@ -228,7 +228,7 @@ impl RequestBuilder {
         body: Option<Vec<u8>>,
         timeout: Duration,
     ) -> crate::error::Result<Response> {
-        let mut cmd = tokio::process::Command::new("curl.exe");
+        let mut cmd = crate::async_rt::process::Command::new("curl.exe");
         cmd.arg("-s").arg("-i").arg("-N");
         cmd.arg("-X").arg(&method);
         cmd.arg("--max-time").arg(timeout.as_secs().max(1).to_string());
@@ -287,8 +287,8 @@ impl RequestBuilder {
             .unwrap_or(false);
 
         if is_event_stream {
-            let (tx, rx) = tokio::sync::mpsc::channel::<Vec<u8>>(128);
-            tokio::spawn(async move {
+            let (tx, rx) = crate::async_rt::sync::mpsc::channel::<Vec<u8>>(128);
+            crate::async_rt::task::spawn(async move {
                 let mut buf = [0u8; 4096];
                 loop {
                     match stdout.read(&mut buf).await {
@@ -416,8 +416,7 @@ pub mod blocking {
             let mut child = cmd.spawn()?;
             if let Some(b) = self.body {
                 if let Some(mut stdin) = child.stdin.take() {
-                    use std::io::Write;
-                    let _ = stdin.write_all(&b);
+                    let _ = std::io::Write::write_all(&mut stdin, &b);
                 }
             }
 

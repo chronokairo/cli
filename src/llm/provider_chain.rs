@@ -6,7 +6,7 @@
 type CompletionFuture<'a> = std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, ProviderError>> + Send + 'a>>;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::Mutex;
+use crate::async_rt::sync::Mutex;
 
 // ---------- Token bucket (rate limiter) ----------
 
@@ -43,7 +43,7 @@ impl TokenBucket {
                     return;
                 }
             }
-            tokio::time::sleep(Duration::from_millis(200)).await;
+            crate::async_rt::time::sleep(Duration::from_millis(200)).await;
         }
     }
 }
@@ -79,9 +79,9 @@ pub enum CircuitState {
 }
 
 pub struct CircuitBreaker {
-    state: tokio::sync::Mutex<CircuitState>,
-    failures: tokio::sync::Mutex<u32>,
-    opened_at: tokio::sync::Mutex<Option<Instant>>,
+    state: Mutex<CircuitState>,
+    failures: Mutex<u32>,
+    opened_at: Mutex<Option<Instant>>,
     threshold: u32,
     cooldown: Duration,
 }
@@ -89,9 +89,9 @@ pub struct CircuitBreaker {
 impl CircuitBreaker {
     pub fn new(threshold: u32, cooldown: Duration) -> Self {
         Self {
-            state: tokio::sync::Mutex::new(CircuitState::Closed),
-            failures: tokio::sync::Mutex::new(0),
-            opened_at: tokio::sync::Mutex::new(None),
+            state: Mutex::new(CircuitState::Closed),
+            failures: Mutex::new(0),
+            opened_at: Mutex::new(None),
             threshold,
             cooldown,
         }
@@ -371,7 +371,7 @@ impl FallbackChain {
 async fn backoff_sleep(attempt: u32) {
     let base_ms = 500u64 * 2u64.pow(attempt.min(5));
     let jitter_ms: u64 = crate::random::system_u64().map(|n| n % 250).unwrap_or(0);
-    tokio::time::sleep(Duration::from_millis(base_ms + jitter_ms)).await;
+    crate::async_rt::time::sleep(Duration::from_millis(base_ms + jitter_ms)).await;
 }
 
 // ---------- Exemplo de montagem ----------
@@ -393,7 +393,7 @@ mod tests {
 use std::sync::Arc;
 
     fn run<F: std::future::Future<Output = T>, T>(fut: F) -> T {
-        tokio::runtime::Runtime::new().unwrap().block_on(fut)
+        crate::async_rt::block_on(fut)
     }
 
     enum MockResult {

@@ -901,13 +901,7 @@ pub fn clean_display_path(path: &str, max_width: usize) -> String {
 
 /// Safely execute an async future synchronously without panicking if already inside a Tokio runtime.
 fn block_on_async<F: std::future::Future>(fut: F) -> F::Output {
-    if let Ok(handle) = tokio::runtime::Handle::try_current() {
-        tokio::task::block_in_place(|| handle.block_on(fut))
-    } else {
-        tokio::runtime::Runtime::new()
-            .expect("Failed to create Tokio runtime")
-            .block_on(fut)
-    }
+    crate::async_rt::block_on(fut)
 }
 
 fn auto_test_cache_path() -> std::path::PathBuf {

@@ -1,6 +1,6 @@
 //! Pure std WebSocket (RFC 6455) codec and handshake for Tokio streams.
 
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use crate::async_rt::io::{AsyncReadExt, AsyncWriteExt};
 
 pub const WS_GUID: &[u8] = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 

@@ -10,6 +10,8 @@ mod password;
 mod agent;
 mod app_server;
 mod bench;
+pub mod async_rt;
+pub use async_rt as tokio;
 mod compressor;
 mod config;
 pub mod http;
@@ -119,8 +121,11 @@ async fn build_router(cli: &Cli, cfg: &mut Config) -> Result<LlmRouter> {
     Ok(router)
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
+    crate::async_rt::block_on(async_main())
+}
+
+async fn async_main() -> Result<()> {
     let cli = Cli::parse();
     // The TUI owns the alternate screen, so route all log output to a file
     // instead of stdout. Otherwise retry warnings (HTTP 429/5xx backoff) from
@@ -585,7 +590,9 @@ fn get_cloud_models() -> Vec<(String, String, String, String, f64)> {
 
 async fn handle_providers(action: ProvidersAction) -> Result<()> {
     use providers::{print_store, test_provider, ProviderEntry, ProviderStore};
-    let catalog_client = tokio::task::spawn_blocking(providers::ModelsDevClient::load).await?;
+    let catalog_client = crate::async_rt::task::spawn_blocking(providers::ModelsDevClient::load)
+        .await
+        .map_err(|_| crate::error::message("failed to load catalog"))?;
     let catalog = &catalog_client.catalog;
 
     match action {
