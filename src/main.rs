@@ -199,6 +199,15 @@ enum Commands {
         #[arg(short, long)]
         out: Option<PathBuf>,
     },
+    /// Compile and display curated project context using the Zero-Lib ChronoContext engine
+    Context {
+        /// Optional task query to filter relevant domain documents
+        #[arg(short, long)]
+        task: Option<String>,
+        /// Character budget limit for the context pack
+        #[arg(short, long, default_value = "8000")]
+        budget: usize,
+    },
 }
 
 /// Sub-actions for `rust-agent providers`
@@ -359,6 +368,16 @@ async fn main() -> Result<()> {
         .await;
     }
 
+    if let Some(Commands::Context { task, budget }) = &cli.command {
+        let pack = crate::repo::ChronoContextEngine::build_context_pack(
+            &cfg.workspace_dir,
+            task.as_deref(),
+            *budget,
+        );
+        println!("{pack}");
+        return Ok(());
+    }
+
     let client = build_router(&cli, &mut cfg).await?;
     let mut state = AgentState::new(cfg)?;
     if cli.cont || cli.resume {
@@ -469,6 +488,7 @@ async fn main() -> Result<()> {
             )
             .await?;
         }
+        Some(Commands::Context { .. }) => unreachable!(),
         None => {
             if let Some(task) = cli.task {
                 run_agent_loop(&client, &mut state, &task).await;

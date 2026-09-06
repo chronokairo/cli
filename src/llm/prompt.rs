@@ -49,16 +49,25 @@ impl CoderPrompt {
     }
 
     pub fn load_project_context(workspace: &std::path::Path) -> String {
-        let candidates = ["AGENTS.md", "CLAUDE.md", ".cursorrules", "CONTEXT.md"];
         let mut loaded = Vec::new();
-        for name in candidates {
-            let path = workspace.join(name);
-            if path.is_file() {
-                if let Ok(content) = std::fs::read_to_string(&path) {
-                    let trimmed = content.trim();
-                    if !trimmed.is_empty() {
-                        let capped: String = trimmed.chars().take(4000).collect();
-                        loaded.push(format!("### Project Instructions ({name})\n{capped}"));
+
+        // 1. Zero-Lib ChronoContext Engine for structured Obsidian & Markdown vaults
+        if workspace.join("AGENTS.md").is_file() {
+            let pack = crate::repo::ChronoContextEngine::build_context_pack(workspace, None, 12000);
+            if !pack.trim().is_empty() {
+                loaded.push(pack);
+            }
+        } else {
+            let candidates = ["CLAUDE.md", ".cursorrules", "CONTEXT.md"];
+            for name in candidates {
+                let path = workspace.join(name);
+                if path.is_file() {
+                    if let Ok(content) = std::fs::read_to_string(&path) {
+                        let trimmed = content.trim();
+                        if !trimmed.is_empty() {
+                            let capped: String = trimmed.chars().take(4000).collect();
+                            loaded.push(format!("### Project Instructions ({name})\n{capped}"));
+                        }
                     }
                 }
             }

@@ -44,6 +44,7 @@ src/
 3. **Approval via protocol** — `Op::ExecApproval` / `Op::PlanApproval` route decisions to blocked callbacks. Plan mode adds `PlanApprovalRequest` event.
 4. **Event log is canonical** — All state mutations produce typed events. History reconstruction never loses tool calls.
 5. **Transactionality is local** — Workspace snapshot/rollback lives in `tools/transaction.rs`; loop layer treats it as opaque gate.
+6. **Zero-Lib Policy (Std-First)** — NO new external crates may be added to `Cargo.toml`. All context engines, markdown parsers, protocol adapters, and linters must be built exclusively with Rust's standard library (`std::*`) and existing primitives. This guarantees fast compilation, minimal binary size, zero dependency bloat, and total resilience against supply-chain attacks.
 
 ### Migration Checklist (Do Not Skip)
 

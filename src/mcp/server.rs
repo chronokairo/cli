@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 pub struct McpServer {
     session: Arc<Session>,
+    workspace: std::path::PathBuf,
 }
 
 impl McpServer {
@@ -14,8 +15,9 @@ impl McpServer {
         client: crate::llm::router::LlmRouter,
         state: crate::agent::state::AgentState,
     ) -> Self {
+        let workspace = state.config.workspace_dir.clone();
         let session = Arc::new(Session::spawn(client, state));
-        Self { session }
+        Self { session, workspace }
     }
 
     pub fn run_stdio(self) -> Result<()> {
@@ -51,23 +53,54 @@ impl McpServer {
             match method {
                 "tools/list" => {
                     let result = serde_json::json!({
-                        "tools": [{
-                            "name": "run_coder",
-                            "description": "Run a coding task with the Anamnesic agent. Returns the final result.",
-                            "inputSchema": {
-                                "type": "object",
-                                "properties": {
-                                    "prompt": {"type": "string", "description": "The task to execute"},
-                                    "mode": {"type": "string", "enum": ["agent", "plan"], "default": "agent", "description": "Execution mode: agent (tool-use) or plan (planner-first)"}
-                                },
-                                "required": ["prompt"]
+                        "tools": [
+                            {
+                                "name": "run_coder",
+                                "description": "Run a coding task with the Anamnesic agent. Returns the final result.",
+                                "inputSchema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "prompt": {"type": "string", "description": "The task to execute"},
+                                        "mode": {"type": "string", "enum": ["agent", "plan"], "default": "agent", "description": "Execution mode: agent (tool-use) or plan (planner-first)"}
+                                    },
+                                    "required": ["prompt"]
+                                }
+                            },
+                            {
+                                "name": "chrono_get_context",
+                                "description": "Retrieve curated ChronoKairo operational context, MOC guidelines, and active task directives using the Zero-Lib ChronoContext engine.",
+                                "inputSchema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "task": {"type": "string", "description": "The specific task or domain keyword (e.g. 'reels', 'marketing', 'leads', 'proposta')"},
+                                        "char_budget": {"type": "integer", "default": 8000, "description": "Maximum character budget for the returned context pack"}
+                                    }
+                                }
                             }
-                        }]
+                        ]
                     });
                     self.write_response(id.unwrap_or(Value::Null), result)?;
                 }
                 "tools/call" => {
                     let tool_name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                    if tool_name == "chrono_get_context" {
+                        let args = params.get("arguments").cloned().unwrap_or(Value::Null);
+                        let task = args.get("task").and_then(|v| v.as_str());
+                        let budget = args.get("char_budget").and_then(|v| v.as_u64()).unwrap_or(8000) as usize;
+                        let pack = crate::repo::ChronoContextEngine::build_context_pack(
+                            &self.workspace,
+                            task,
+                            budget,
+                        );
+                        let result = serde_json::json!({
+                            "content": [{
+                                "type": "text",
+                                "text": pack
+                            }]
+                        });
+                        self.write_response(id.unwrap_or(Value::Null), result)?;
+                        continue;
+                    }
                     if tool_name == "run_coder" {
                         let args = params.get("arguments").cloned().unwrap_or(Value::Null);
                         let prompt = args.get("prompt").and_then(|v| v.as_str()).unwrap_or("");
