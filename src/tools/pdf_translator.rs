@@ -1,6 +1,4 @@
 use crate::error::{Context, Result};
-use lopdf::content::Content;
-use lopdf::{Document, Object};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::File;
@@ -60,96 +58,126 @@ fn save_cli_cache(cache: &HashMap<String, String>) {
     }
 }
 
-/// Extrai texto de objetos e operadores de conteúdo descompactados do lopdf (Tj, TJ, ', ")
-fn extract_text_from_content(content: &Content) -> String {
-    let mut text = String::new();
-    for op in &content.operations {
-        match op.operator.as_str() {
-            "Tj" | "'" | "\"" => {
-                for operand in &op.operands {
-                    if let Object::String(bytes, _) = operand {
-                        let s = String::from_utf8_lossy(bytes);
-                        let clean = s.trim();
-                        if !clean.is_empty() {
-                            text.push_str(clean);
-                            text.push(' ');
-                        }
-                    }
-                }
-            }
-            "TJ" => {
-                for operand in &op.operands {
-                    if let Object::Array(items) = operand {
-                        for item in items {
-                            if let Object::String(bytes, _) = item {
-                                let s = String::from_utf8_lossy(bytes);
-                                let clean = s.trim();
-                                if !clean.is_empty() {
-                                    text.push_str(clean);
-                                    text.push(' ');
-                                }
-                            }
-                        }
-                    }
-                }
-                text.push('\n');
-            }
-            "ET" => {
-                text.push('\n');
-            }
-            _ => {}
-        }
-    }
-    text
-}
-
-/// Extração de PDF de alta fidelidade: lopdf extract_text + Content AST descompactada
+/// Extração de texto de arquivos PDF sem dependências externas (Zero-Lib).
+/// Analisa streams e blocos textuais (`BT`...`ET`, strings literais `(...)` e hex `<...>`).
 pub fn extract_text_from_pdf(path: &Path) -> Result<String> {
-    let doc = Document::load(path)
+    let bytes = std::fs::read(path)
         .with_context(|| format!("Falha ao carregar PDF: {}", path.display()))?;
 
-    let pages_map = doc.get_pages();
-    if pages_map.is_empty() {
-        crate::error::bail!("O documento PDF não possui páginas válidas.");
+    if !bytes.starts_with(b"%PDF-") {
+        crate::error::bail!("Arquivo informado não possui cabeçalho PDF válido.");
     }
 
-    let mut full_extracted_text = String::new();
+    let mut out = String::new();
+    let mut i = 0;
+    let len = bytes.len();
 
-    let mut sorted_pages: Vec<(u32, (u32, u16))> = pages_map.into_iter().collect();
-    sorted_pages.sort_by_key(|&(p_num, _)| p_num);
+    while i < len {
+        // Look for Begin Text block 'BT'
+        if i + 1 < len && bytes[i] == b'B' && bytes[i + 1] == b'T' && (i == 0 || bytes[i - 1].is_ascii_whitespace()) {
+            i += 2;
+            let mut in_parentheses = false;
+            let mut in_hex = false;
+            let mut escape = false;
+            let mut current_literal = Vec::new();
+            let mut hex_buf = Vec::new();
 
-    for (page_num, page_id) in sorted_pages {
-        let mut page_text = String::new();
-
-        // Camada 1: lopdf extract_text padrão
-        if let Ok(t) = doc.extract_text(&[page_num]) {
-            let trimmed = t.trim();
-            if !trimmed.is_empty() && trimmed.len() > 15 {
-                page_text = trimmed.to_string();
-            }
-        }
-
-        // Camada 2: Extração direta dos operadores descompactados (Tj / TJ / etc)
-        if page_text.trim().is_empty() {
-            if let Ok(content) = doc.get_and_decode_page_content(page_id) {
-                let stream_text = extract_text_from_content(&content);
-                if stream_text.trim().len() > 15 {
-                    page_text = stream_text;
+            while i < len {
+                // Check for End Text block 'ET'
+                if !in_parentheses && !in_hex && i + 1 < len && bytes[i] == b'E' && bytes[i + 1] == b'T' {
+                    i += 2;
+                    out.push('\n');
+                    break;
                 }
+
+                let b = bytes[i];
+                if in_parentheses {
+                    if escape {
+                        match b {
+                            b'n' => current_literal.push(b'\n'),
+                            b'r' => current_literal.push(b'\r'),
+                            b't' => current_literal.push(b'\t'),
+                            b'\\' => current_literal.push(b'\\'),
+                            b'(' => current_literal.push(b'('),
+                            b')' => current_literal.push(b')'),
+                            _ => current_literal.push(b),
+                        }
+                        escape = false;
+                    } else if b == b'\\' {
+                        escape = true;
+                    } else if b == b')' {
+                        in_parentheses = false;
+                        if !current_literal.is_empty() {
+                            let s = String::from_utf8_lossy(&current_literal);
+                            let trimmed = s.trim();
+                            if !trimmed.is_empty() {
+                                out.push_str(trimmed);
+                                out.push(' ');
+                            }
+                            current_literal.clear();
+                        }
+                    } else {
+                        current_literal.push(b);
+                    }
+                } else if in_hex {
+                    if b == b'>' {
+                        in_hex = false;
+                        if let Ok(decoded) = hex_decode(&hex_buf) {
+                            let s = String::from_utf8_lossy(&decoded);
+                            let trimmed = s.trim();
+                            if !trimmed.is_empty() {
+                                out.push_str(trimmed);
+                                out.push(' ');
+                            }
+                        }
+                        hex_buf.clear();
+                    } else if !b.is_ascii_whitespace() {
+                        hex_buf.push(b);
+                    }
+                } else if b == b'(' {
+                    in_parentheses = true;
+                    escape = false;
+                    current_literal.clear();
+                } else if b == b'<' && i + 1 < len && bytes[i + 1] != b'<' {
+                    in_hex = true;
+                    hex_buf.clear();
+                }
+                i += 1;
             }
-        }
-
-        if !page_text.trim().is_empty() {
-            full_extracted_text.push_str(&format!("\n\n### Página {}\n\n", page_num));
-            full_extracted_text.push_str(page_text.trim());
+        } else {
+            i += 1;
         }
     }
 
-    if full_extracted_text.trim().is_empty() {
-        crate::error::bail!("Nenhum texto pôde ser extraído. Se for um PDF escaneado (imagem pura), o OCR é necessário.");
+    let trimmed = out.trim();
+    if trimmed.is_empty() {
+        crate::error::bail!("Nenhum texto pôde ser extraído. Se for um PDF escaneado (imagem pura) ou compactado com criptografia pesada, o OCR é necessário.");
     }
 
-    Ok(full_extracted_text)
+    Ok(trimmed.to_string())
+}
+
+fn hex_decode(input: &[u8]) -> Result<Vec<u8>> {
+    let mut res = Vec::with_capacity(input.len() / 2);
+    let mut high: Option<u8> = None;
+    for &b in input {
+        let val = match b {
+            b'0'..=b'9' => b - b'0',
+            b'a'..=b'f' => b - b'a' + 10,
+            b'A'..=b'F' => b - b'A' + 10,
+            _ => continue,
+        };
+        if let Some(h) = high {
+            res.push((h << 4) | val);
+            high = None;
+        } else {
+            high = Some(val);
+        }
+    }
+    if let Some(h) = high {
+        res.push(h << 4);
+    }
+    Ok(res)
 }
 
 /// Traduz o texto com streaming direto do Ollama para o terminal e salva em arquivo se solicitado

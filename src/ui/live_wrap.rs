@@ -4,9 +4,7 @@
 //!
 //! Adapted from OpenAI Codex's `tui/src/live_wrap.rs`.
 
-use unicode_segmentation::UnicodeSegmentation;
-
-use crate::ui::width::display_width;
+use crate::ui::width::{display_width, grapheme_indices, graphemes};
 
 /// A single visual row produced by RowBuilder.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -146,8 +144,8 @@ impl RowBuilder {
                 take_prefix_by_width(&self.current_line, self.target_width);
             if taken == 0 {
                 // Avoid an infinite loop on an indivisible grapheme wider than the target.
-                if let Some(grapheme) = self.current_line.graphemes(true).next() {
-                    let len = grapheme.len();
+                let grapheme_len = graphemes(&self.current_line).next().map(|g| g.len());
+                if let Some(len) = grapheme_len {
                     let p = self.current_line[..len].to_string();
                     self.rows.push(Row {
                         text: p,
@@ -181,7 +179,7 @@ pub fn take_prefix_by_width(text: &str, max_cols: usize) -> (String, &str, usize
     }
     let mut cols = 0usize;
     let mut end_idx = 0usize;
-    for (i, grapheme) in text.grapheme_indices(true) {
+    for (i, grapheme) in grapheme_indices(text) {
         let grapheme_width = display_width(grapheme);
         if cols.saturating_add(grapheme_width) > max_cols {
             break;

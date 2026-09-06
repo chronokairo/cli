@@ -4,9 +4,7 @@
 //! Adapted from OpenAI Codex's `tui/src/line_truncation.rs`.
 
 use ratatui::text::{Line, Span};
-use unicode_segmentation::UnicodeSegmentation;
-
-use crate::ui::width::display_width;
+use crate::ui::width::{display_width, grapheme_indices};
 
 pub(crate) fn line_width(line: &Line<'_>) -> usize {
     line.iter()
@@ -48,7 +46,7 @@ pub(crate) fn truncate_line_to_width(line: Line<'static>, max_width: usize) -> L
         let style = span.style;
         let text = span.content.as_ref();
         let mut end_idx = 0usize;
-        for (idx, grapheme) in text.grapheme_indices(true) {
+        for (idx, grapheme) in grapheme_indices(text) {
             let grapheme_width = display_width(grapheme);
             if used + grapheme_width > max_width {
                 break;

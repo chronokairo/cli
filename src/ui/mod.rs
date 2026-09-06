@@ -42,10 +42,9 @@ mod live_wrap;
 mod pager_overlay;
 mod width;
 
-use unicode_segmentation::UnicodeSegmentation;
+use width::{display_width, grapheme_indices};
 
 use file_search::FileMatch;
-use width::display_width;
 
 const SPINNER: [char; 8] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧'];
 
@@ -3816,168 +3815,201 @@ fn push_block_sep(spans: &mut Vec<Span<'static>>, sep: &str) {
 }
 
 fn render_markdown_lines(text: &str) -> Option<Vec<Span<'static>>> {
-    use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
-    let mut opts = Options::empty();
-    opts.insert(Options::ENABLE_TABLES);
-    opts.insert(Options::ENABLE_STRIKETHROUGH);
-    opts.insert(Options::ENABLE_TASKLISTS);
-    let parser = Parser::new_ext(text, opts);
     let mut spans: Vec<Span<'static>> = Vec::new();
-    let mut in_code = false;
-    let mut in_bold = false;
-    let mut in_italic = false;
-    let mut in_strike = false;
-    let mut in_heading = false;
-    let mut in_table_head = false;
-    let mut first_cell_in_row = true;
-    let mut code_text = String::new();
-    for event in parser {
-        match event {
-            Event::Text(t) => {
-                if in_code {
-                    code_text.push_str(t.as_ref());
-                } else {
-                    let mut style = Style::default();
-                    if in_heading {
-                        style = style.fg(Color::Cyan).add_modifier(Modifier::BOLD);
-                    } else if in_table_head {
-                        style = style.fg(Color::LightYellow).add_modifier(Modifier::BOLD);
-                    }
-                    if in_bold {
-                        style = style.add_modifier(Modifier::BOLD);
-                    }
-                    if in_italic {
-                        style = style.add_modifier(Modifier::ITALIC);
-                    }
-                    if in_strike {
-                        style = style.add_modifier(Modifier::DIM);
-                    }
-                    spans.push(Span::styled(t.as_ref().to_string(), style));
-                }
-            }
-            Event::Code(t) => {
+    let mut in_code_block = false;
+    let mut code_block_text = String::new();
+
+    let lines: Vec<&str> = text.split('\n').collect();
+    for (i, raw_line) in lines.iter().enumerate() {
+        let line = raw_line.trim_end();
+
+        // Fenced code block toggle
+        if line.starts_with("```") {
+            if in_code_block {
                 spans.push(Span::styled(
-                    t.as_ref().to_string(),
+                    code_block_text.clone(),
                     Style::default()
-                        .fg(Color::Yellow)
+                        .fg(Color::LightYellow)
+                        .bg(Color::Rgb(30, 30, 30))
                         .add_modifier(Modifier::BOLD),
                 ));
+                code_block_text.clear();
+                in_code_block = false;
+            } else {
+                in_code_block = true;
+                code_block_text.clear();
             }
-            Event::SoftBreak | Event::HardBreak => {
-                if in_code {
-                    code_text.push('\n');
-                } else {
-                    spans.push(Span::raw("\n".to_string()));
-                }
+            continue;
+        }
+
+        if in_code_block {
+            if !code_block_text.is_empty() {
+                code_block_text.push('\n');
             }
-            Event::Start(tag) => match tag {
-                Tag::Paragraph => {
-                    if !in_code {
-                        push_block_sep(&mut spans, "\n\n");
-                    }
-                }
-                Tag::Heading { level, .. } => {
-                    in_heading = true;
-                    push_block_sep(&mut spans, "\n\n");
-                    let prefix = match level {
-                        HeadingLevel::H1 => "◆ ",
-                        HeadingLevel::H2 => "◈ ",
-                        _ => "▪ ",
-                    };
-                    spans.push(Span::styled(
-                        prefix.to_string(),
-                        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
-                    ));
-                }
-                Tag::List(_) => {
-                    push_block_sep(&mut spans, "\n");
-                }
-                Tag::Item => {
-                    push_block_sep(&mut spans, "\n");
-                    spans.push(Span::styled("• ", Style::default().fg(Color::LightCyan)));
-                }
-                Tag::TableHead => {
-                    in_table_head = true;
-                    first_cell_in_row = true;
-                    push_block_sep(&mut spans, "\n");
-                    spans.push(Span::styled("│ ", Style::default().fg(Color::DarkGray)));
-                }
-                Tag::TableRow => {
-                    first_cell_in_row = true;
-                    push_block_sep(&mut spans, "\n");
-                    spans.push(Span::styled("│ ", Style::default().fg(Color::DarkGray)));
-                }
-                Tag::TableCell => {
-                    if !first_cell_in_row {
-                        spans.push(Span::styled(" │ ", Style::default().fg(Color::DarkGray)));
-                    }
-                    first_cell_in_row = false;
-                }
-                Tag::BlockQuote(_) => {
-                    push_block_sep(&mut spans, "\n");
-                    spans.push(Span::styled("▎ ", Style::default().fg(Color::Gray)));
-                }
-                Tag::CodeBlock(_) => {
-                    in_code = true;
-                    code_text.clear();
-                }
-                Tag::Strong => in_bold = true,
-                Tag::Emphasis => in_italic = true,
-                Tag::Strikethrough => in_strike = true,
-                Tag::Link { .. } => {}
-                _ => {}
-            },
-            Event::End(tag) => match tag {
-                TagEnd::Heading(_) => {
-                    in_heading = false;
-                    push_block_sep(&mut spans, "\n");
-                }
-                TagEnd::TableHead => {
-                    in_table_head = false;
-                    spans.push(Span::styled(" │", Style::default().fg(Color::DarkGray)));
-                    push_block_sep(&mut spans, "\n");
-                    spans.push(Span::styled(
-                        "├──────────────────────────┼──────────────────────────────────────────┤",
-                        Style::default().fg(Color::DarkGray),
-                    ));
-                }
-                TagEnd::TableRow => {
-                    spans.push(Span::styled(" │", Style::default().fg(Color::DarkGray)));
-                }
-                TagEnd::CodeBlock => {
-                    spans.push(Span::styled(
-                        code_text.clone(),
-                        Style::default()
-                            .fg(Color::LightYellow)
-                            .bg(Color::Rgb(30, 30, 30))
-                            .add_modifier(Modifier::BOLD),
-                    ));
-                    in_code = false;
-                    code_text.clear();
-                }
-                TagEnd::List(_)
-                | TagEnd::BlockQuote(_)
-                | TagEnd::Table => {
-                    push_block_sep(&mut spans, "\n");
-                }
-                TagEnd::Strong => in_bold = false,
-                TagEnd::Emphasis => in_italic = false,
-                TagEnd::Strikethrough => in_strike = false,
-                _ => {}
-            },
-            Event::Rule => {
+            code_block_text.push_str(line);
+            continue;
+        }
+
+        // Empty line
+        if line.trim().is_empty() {
+            push_block_sep(&mut spans, "\n\n");
+            continue;
+        }
+
+        // Horizontal Rule
+        if line.starts_with("---") || line.starts_with("***") || line.starts_with("___") {
+            push_block_sep(&mut spans, "\n");
+            spans.push(Span::styled("─".repeat(40), Style::default().fg(Color::DarkGray)));
+            continue;
+        }
+
+        // Headings
+        if let Some(rest) = line.strip_prefix("# ") {
+            push_block_sep(&mut spans, "\n\n");
+            spans.push(Span::styled("◆ ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)));
+            render_inline(rest, &mut spans, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
+            push_block_sep(&mut spans, "\n");
+            continue;
+        } else if let Some(rest) = line.strip_prefix("## ") {
+            push_block_sep(&mut spans, "\n\n");
+            spans.push(Span::styled("◈ ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)));
+            render_inline(rest, &mut spans, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
+            push_block_sep(&mut spans, "\n");
+            continue;
+        } else if let Some(rest) = line.strip_prefix("### ") {
+            push_block_sep(&mut spans, "\n\n");
+            spans.push(Span::styled("▪ ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)));
+            render_inline(rest, &mut spans, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
+            push_block_sep(&mut spans, "\n");
+            continue;
+        }
+
+        // List item (- or * or +)
+        let trimmed_start = line.trim_start();
+        if trimmed_start.starts_with("- ") || trimmed_start.starts_with("* ") || trimmed_start.starts_with("+ ") {
+            push_block_sep(&mut spans, "\n");
+            spans.push(Span::styled("• ", Style::default().fg(Color::LightCyan)));
+            let item_text = &trimmed_start[2..];
+            render_inline(item_text, &mut spans, Style::default());
+            continue;
+        }
+
+        // Numbered list item
+        let first_word = trimmed_start.split_whitespace().next().unwrap_or("");
+        if first_word.ends_with('.') && first_word[..first_word.len() - 1].chars().all(|c| c.is_ascii_digit()) {
+            push_block_sep(&mut spans, "\n");
+            spans.push(Span::styled("• ", Style::default().fg(Color::LightCyan)));
+            let item_text = trimmed_start[first_word.len()..].trim_start();
+            render_inline(item_text, &mut spans, Style::default());
+            continue;
+        }
+
+        // Blockquote
+        if let Some(rest) = line.strip_prefix("> ") {
+            push_block_sep(&mut spans, "\n");
+            spans.push(Span::styled("▎ ", Style::default().fg(Color::Gray)));
+            render_inline(rest, &mut spans, Style::default().fg(Color::Gray));
+            continue;
+        }
+
+        // Table row
+        if line.starts_with('|') && line.ends_with('|') {
+            let inner = &line[1..line.len() - 1];
+            // Check if delimiter row
+            if inner.chars().all(|c| c == '-' || c == '|' || c == ':' || c == ' ') {
+                push_block_sep(&mut spans, "\n");
                 spans.push(Span::styled(
-                    "─".repeat(40),
+                    "├──────────────────────────┼──────────────────────────────────────────┤",
                     Style::default().fg(Color::DarkGray),
                 ));
+                continue;
             }
-            _ => {}
+
+            push_block_sep(&mut spans, "\n");
+            spans.push(Span::styled("│ ", Style::default().fg(Color::DarkGray)));
+            let cells: Vec<&str> = inner.split('|').collect();
+            for (c_idx, cell) in cells.iter().enumerate() {
+                if c_idx > 0 {
+                    spans.push(Span::styled(" │ ", Style::default().fg(Color::DarkGray)));
+                }
+                render_inline(cell.trim(), &mut spans, Style::default());
+            }
+            spans.push(Span::styled(" │", Style::default().fg(Color::DarkGray)));
+            continue;
         }
+
+        // Regular paragraph / text line
+        if i > 0 && !spans.is_empty() && !spans.last().is_some_and(|s| s.content.ends_with('\n')) {
+            spans.push(Span::raw("\n".to_string()));
+        }
+        render_inline(line, &mut spans, Style::default());
     }
+
+    if in_code_block && !code_block_text.is_empty() {
+        spans.push(Span::styled(
+            code_block_text,
+            Style::default()
+                .fg(Color::LightYellow)
+                .bg(Color::Rgb(30, 30, 30))
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+
     if !spans.is_empty() {
         Some(spans)
     } else {
         None
+    }
+}
+
+/// Helper for rendering bold, italic, code spans in a single line without regex.
+fn render_inline(mut text: &str, spans: &mut Vec<Span<'static>>, base_style: Style) {
+    while !text.is_empty() {
+        // Look for code `...`
+        if let Some(start) = text.find('`') {
+            if let Some(end) = text[start + 1..].find('`') {
+                let before = &text[..start];
+                if !before.is_empty() {
+                    render_inline_styling(before, spans, base_style);
+                }
+                let code_content = &text[start + 1..start + 1 + end];
+                spans.push(Span::styled(
+                    code_content.to_string(),
+                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                ));
+                text = &text[start + 1 + end + 1..];
+                continue;
+            }
+        }
+
+        // No code span, render text with formatting
+        render_inline_styling(text, spans, base_style);
+        break;
+    }
+}
+
+fn render_inline_styling(mut text: &str, spans: &mut Vec<Span<'static>>, base_style: Style) {
+    while !text.is_empty() {
+        // Check for bold **...**
+        if let Some(start) = text.find("**") {
+            if let Some(end) = text[start + 2..].find("**") {
+                let before = &text[..start];
+                if !before.is_empty() {
+                    spans.push(Span::styled(before.to_string(), base_style));
+                }
+                let bold_content = &text[start + 2..start + 2 + end];
+                spans.push(Span::styled(
+                    bold_content.to_string(),
+                    base_style.add_modifier(Modifier::BOLD),
+                ));
+                text = &text[start + 2 + end + 2..];
+                continue;
+            }
+        }
+
+        // Normal text
+        spans.push(Span::styled(text.to_string(), base_style));
+        break;
     }
 }
 
@@ -4010,7 +4042,7 @@ fn truncate_str(s: &str, max: usize) -> String {
     let target = max.saturating_sub(1);
     let mut used = 0usize;
     let mut end = 0usize;
-    for (idx, grapheme) in s.grapheme_indices(true) {
+    for (idx, grapheme) in grapheme_indices(s) {
         let grapheme_width = display_width(grapheme);
         if used + grapheme_width > target {
             break;
