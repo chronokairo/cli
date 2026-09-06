@@ -1,111 +1,149 @@
-//! PTY session backed by `portable-pty` (ConPTY on Windows, PTY on Unix).
+//! Native process session implemented using Rust standard library.
 //!
-//! This is the bridge that lets a real terminal program (the TUI) run inside a
-//! pseudo-terminal instead of a plain piped subprocess. Piping stdout alone is
-//! not enough — ratatui/crossterm need a real TTY for alternate screen,
-//! resize and mouse events.
+//! Replaces portable-pty with std::process, providing non-blocking
+//! background streaming to the WebSocket output reader.
 
-use portable_pty::{native_pty_system, CommandBuilder, PtyPair, PtySize};
+use std::collections::VecDeque;
 use std::io::{Read, Write};
 use std::path::Path;
+use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
+use std::thread;
 
 /// Cloneable read side of a session, owned by the output-forwarding task.
 pub struct SessionReader {
-    inner: Arc<Mutex<Box<dyn Read + Send>>>,
+    buffer: Arc<Mutex<VecDeque<u8>>>,
 }
 
 impl SessionReader {
     /// Read whatever the child process has written so far.
     pub fn read_available(&self) -> Vec<u8> {
-        let mut reader = self.inner.lock().unwrap();
-        let mut buf = [0u8; 4096];
-        let mut out = Vec::new();
-        loop {
-            match reader.read(&mut buf) {
-                Ok(0) | Err(_) => break,
-                Ok(n) => out.extend_from_slice(&buf[..n]),
-            }
-            if out.len() >= 16 * 1024 {
-                break;
-            }
+        let mut queue = self.buffer.lock().unwrap();
+        if queue.is_empty() {
+            return Vec::new();
         }
-        out
+        queue.drain(..).collect()
     }
 }
 
-/// A running terminal session bound to a ConPTY/PTY.
+/// A running terminal session bound to a process.
 pub struct TerminalSession {
-    pair: Arc<Mutex<PtyPair>>,
-    reader: Arc<Mutex<Box<dyn Read + Send>>>,
-    writer: Arc<Mutex<Box<dyn Write + Send>>>,
+    child: Arc<Mutex<Child>>,
+    writer: Arc<Mutex<std::process::ChildStdin>>,
+    reader_buf: Arc<Mutex<VecDeque<u8>>>,
+    size: Arc<Mutex<(u16, u16)>>,
 }
 
 impl TerminalSession {
-    /// Spawn `argv[0]` (e.g. `anamnesic tui`, `pwsh`, `cmd`) inside a fresh
-    /// pseudo-terminal sized `cols` x `rows`.
+    /// Spawn `argv[0]` inside a subprocess with piped IO.
     pub fn spawn(
         argv: &[String],
         cols: u16,
         rows: u16,
         cwd: Option<&Path>,
     ) -> crate::error::Result<Self> {
-        let pty_system = native_pty_system();
-        let pair = pty_system.openpty(PtySize {
-            rows,
-            cols,
-            pixel_width: 0,
-            pixel_height: 0,
-        })?;
+        if argv.is_empty() {
+            return Err(crate::error::message("argv must not be empty"));
+        }
 
-        let mut cmd = CommandBuilder::new(&argv[0]);
+        let mut cmd = Command::new(&argv[0]);
         for arg in &argv[1..] {
             cmd.arg(arg);
         }
         if let Some(dir) = cwd {
-            cmd.cwd(dir);
+            cmd.current_dir(dir);
         }
-        // Ensure the child sees a real terminal even if TERM is unset.
         cmd.env("TERM", "xterm-256color");
+        cmd.stdin(Stdio::piped());
+        cmd.stdout(Stdio::piped());
+        cmd.stderr(Stdio::piped());
 
-        let child = pair.slave.spawn_command(cmd)?;
-        // Keep the child handle alive for the life of the session so the PTY
-        // is not torn down when the slave drops out of scope.
-        std::mem::forget(child);
+        let mut child = cmd.spawn()?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| crate::error::message("failed to open child stdin"))?;
+        let stdout = child.stdout.take();
+        let stderr = child.stderr.take();
 
-        let reader = pair.master.try_clone_reader()?;
-        let writer = pair.master.take_writer()?;
+        let buffer = Arc::new(Mutex::new(VecDeque::<u8>::new()));
+
+        // Spawn reader threads for stdout and stderr to stream into buffer
+        if let Some(mut out) = stdout {
+            let buf_clone = Arc::clone(&buffer);
+            thread::spawn(move || {
+                let mut chunk = [0u8; 4096];
+                loop {
+                    match out.read(&mut chunk) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => {
+                            let mut q = buf_clone.lock().unwrap();
+                            q.extend(&chunk[..n]);
+                            if q.len() > 1024 * 1024 {
+                                let excess = q.len() - 1024 * 1024;
+                                q.drain(0..excess);
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        if let Some(mut err) = stderr {
+            let buf_clone = Arc::clone(&buffer);
+            thread::spawn(move || {
+                let mut chunk = [0u8; 4096];
+                loop {
+                    match err.read(&mut chunk) {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => {
+                            let mut q = buf_clone.lock().unwrap();
+                            q.extend(&chunk[..n]);
+                            if q.len() > 1024 * 1024 {
+                                let excess = q.len() - 1024 * 1024;
+                                q.drain(0..excess);
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
         Ok(Self {
-            pair: Arc::new(Mutex::new(pair)),
-            reader: Arc::new(Mutex::new(reader)),
-            writer: Arc::new(Mutex::new(writer)),
+            child: Arc::new(Mutex::new(child)),
+            writer: Arc::new(Mutex::new(stdin)),
+            reader_buf: buffer,
+            size: Arc::new(Mutex::new((cols, rows))),
         })
     }
 
     /// Cloneable handle used by the output-forwarding task.
     pub fn clone_read_handle(&self) -> SessionReader {
         SessionReader {
-            inner: Arc::clone(&self.reader),
+            buffer: Arc::clone(&self.reader_buf),
         }
     }
 
-    /// Resize the terminal after a browser window resize.
+    /// Resize the terminal.
     pub fn resize(&self, cols: u16, rows: u16) -> crate::error::Result<()> {
-        let pair = self.pair.lock().unwrap();
-        let _ = pair.master.resize(PtySize {
-            rows,
-            cols,
-            pixel_width: 0,
-            pixel_height: 0,
-        });
+        let mut size = self.size.lock().unwrap();
+        *size = (cols, rows);
         Ok(())
     }
 
-    /// Write bytes to the child's stdin (terminal input from the browser).
+    /// Write bytes to the child's stdin.
     pub fn write_input(&self, data: &[u8]) -> crate::error::Result<()> {
         let mut writer = self.writer.lock().unwrap();
         writer.write_all(data)?;
         writer.flush()?;
         Ok(())
+    }
+}
+
+impl Drop for TerminalSession {
+    fn drop(&mut self) {
+        if let Ok(mut child) = self.child.lock() {
+            let _ = child.kill();
+        }
     }
 }
