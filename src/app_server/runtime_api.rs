@@ -254,7 +254,7 @@ fn allow_command_always(params: &Value) -> Result<Value, String> {
         command: command.to_string(),
         decision: crate::tools::exec_policy::Decision::Allow,
         scope: params.get("scope").and_then(Value::as_str).map(str::to_string),
-        justification: Some(format!("Allowed from runtime panel at {}", chrono::Utc::now().to_rfc3339())),
+        justification: Some(format!("Allowed from runtime panel at {}", crate::types::time::now_utc_rfc3339())),
     });
     policy.save(&crate::tools::exec_policy::default_path())?;
     Ok(json!({"ok": true}))
@@ -316,7 +316,7 @@ fn patch_commit(workspace: &Path, params: &Value, backup: bool) -> Result<Value,
     let patch = patch_text(params)?;
     // Preview validates every hunk before any write begins.
     crate::tools::patch::preview_patch(workspace, patch).map_err(|error| error.to_string())?;
-    let patch_id = chrono::Utc::now().timestamp_millis().unsigned_abs();
+    let patch_id = crate::types::time::now_timestamp_millis();
     if backup {
         let canonical_workspace = workspace.canonicalize().map_err(|error| error.to_string())?;
         let entries = crate::tools::patch::affected_paths(patch)
@@ -433,9 +433,8 @@ fn file_watch_snapshot(workspace: &Path, params: &Value) -> Result<Value, String
     let since = params
         .get("since")
         .and_then(Value::as_str)
-        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
-        .map(|value| value.with_timezone(&chrono::Utc))
-        .unwrap_or_else(|| chrono::Utc::now() - chrono::Duration::hours(1));
+        .and_then(crate::types::time::parse_rfc3339_to_system_time)
+        .unwrap_or_else(|| std::time::SystemTime::now() - std::time::Duration::from_secs(3600));
     let candidates = [
         "AGENTS.md", "CLAUDE.md", "package.json", "Cargo.toml", ".git/HEAD", ".git/index",
     ];
@@ -444,13 +443,12 @@ fn file_watch_snapshot(workspace: &Path, params: &Value) -> Result<Value, String
         .filter_map(|name| {
             let path = workspace.join(name);
             let modified = path.metadata().ok()?.modified().ok()?;
-            let modified = chrono::DateTime::<chrono::Utc>::from(modified);
             (modified > since).then(|| {
                 json!({"path": path.to_string_lossy(), "kind": "modify"})
             })
         })
         .collect::<Vec<_>>();
-    Ok(json!({"events": events, "timestamp": chrono::Utc::now().to_rfc3339()}))
+    Ok(json!({"events": events, "timestamp": crate::types::time::now_utc_rfc3339()}))
 }
 
 fn memory() -> Result<crate::memory::log::LongTermMemory, String> {
@@ -558,7 +556,7 @@ fn context_files(workspace: &Path) -> Result<Value, String> {
             .metadata()
             .and_then(|metadata| metadata.modified())
             .ok()
-            .map(|time| chrono::DateTime::<chrono::Utc>::from(time).to_rfc3339())
+            .map(crate::types::time::format_system_time_rfc3339)
             .unwrap_or_default();
         files.push(json!({
             "name": name,
@@ -652,7 +650,7 @@ fn git_scan(workspace: &Path) -> Result<Value, String> {
         "path": workspace.to_string_lossy(), "name": name, "branch": branch,
         "ahead": 0, "behind": 0, "files": 0, "tech_stack": [],
         "build_status": if status.get("clean") == Some(&Value::Bool(true)) { "Clean" } else { "Modified" },
-        "last_activity": chrono::Utc::now().to_rfc3339()
+        "last_activity": crate::types::time::now_utc_rfc3339()
     });
     Ok(json!({"repos": [repo], "scanned_dir": workspace.to_string_lossy()}))
 }

@@ -1,6 +1,5 @@
 use super::EventMsg;
 use anyhow::{Context, Result};
-use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
@@ -59,7 +58,7 @@ impl CanonicalEventLog {
         let entry = EventLogEntry {
             schema_version: 1,
             sequence_id: seq,
-            timestamp: Utc::now().to_rfc3339(),
+            timestamp: crate::types::time::now_utc_rfc3339(),
             session_id: session_id.to_string(),
             turn_id,
             event,
@@ -82,7 +81,7 @@ impl CanonicalEventLog {
         let entry = EventLogEntry {
             schema_version: 1,
             sequence_id: seq,
-            timestamp: Utc::now().to_rfc3339(),
+            timestamp: crate::types::time::now_utc_rfc3339(),
             session_id: session_id.to_string(),
             turn_id,
             event,

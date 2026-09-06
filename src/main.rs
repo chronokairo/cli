@@ -60,7 +60,7 @@ impl log::Log for FileLogger {
             let _ = writeln!(
                 f,
                 "{} [{}] {} - {}",
-                chrono::Local::now().format("%Y-%m-%dT%H:%M:%S%.3f"),
+                crate::types::time::now_local_iso_millis(),
                 record.level(),
                 record.target(),
                 record.args()

@@ -1,4 +1,3 @@
-use chrono::Local;
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 
@@ -122,7 +121,7 @@ impl LongTermMemory {
 
     /// Create a new session record and return its id.
     pub fn start_session(&self, workspace: &str, model: &str) -> anyhow::Result<i64> {
-        let now = Local::now().to_rfc3339();
+        let now = crate::types::time::now_local_rfc3339();
         self.conn.execute(
             "INSERT INTO sessions (timestamp, summary, context, workspace, model, updated_at, status, message_count)
              VALUES (?1, '', '', ?2, ?3, ?4, 'active', 0)",
@@ -143,7 +142,7 @@ impl LongTermMemory {
             return Ok(());
         }
         let tx = self.conn.unchecked_transaction()?;
-        let now = Local::now().to_rfc3339();
+        let now = crate::types::time::now_local_rfc3339();
         {
             let mut stmt = tx.prepare(
                 "INSERT OR IGNORE INTO session_messages (session_id, seq, role, content, created_at)
@@ -181,7 +180,7 @@ impl LongTermMemory {
                 updated_at = ?4,
                 message_count = (SELECT COUNT(*) FROM session_messages WHERE session_id = ?5)
              WHERE id = ?5",
-            rusqlite::params![title, context, model, Local::now().to_rfc3339(), session_id],
+            rusqlite::params![title, context, model, crate::types::time::now_local_rfc3339(), session_id],
         )?;
         Ok(())
     }
@@ -203,7 +202,7 @@ impl LongTermMemory {
         self.conn.execute(
             "INSERT INTO memory_vectors (session_id, text, source, created_at, embedding)
              VALUES (?1, ?2, ?3, ?4, ?5)",
-            rusqlite::params![session_id, text, source, Local::now().to_rfc3339(), blob],
+            rusqlite::params![session_id, text, source, crate::types::time::now_local_rfc3339(), blob],
         )?;
         Ok(())
     }
@@ -367,7 +366,7 @@ impl LongTermMemory {
     pub fn save_decision(&self, decision: &str, reason: &str) -> anyhow::Result<()> {
         self.conn.execute(
             "INSERT INTO decisions (timestamp, decision, reason) VALUES (?1, ?2, ?3)",
-            rusqlite::params![Local::now().to_rfc3339(), decision, reason],
+            rusqlite::params![crate::types::time::now_local_rfc3339(), decision, reason],
         )?;
         Ok(())
     }

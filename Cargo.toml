@@ -21,7 +21,6 @@ anyhow = "1"
 rusqlite = { version = "0.31", features = ["bundled"] }
 log = "0.4"
 simple_logger = "5"
-chrono = "0.4"
 bytemuck = { version = "1", features = ["derive"] }
 rand = "0.8"
 regex = "1"
