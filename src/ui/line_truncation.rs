@@ -18,7 +18,7 @@ pub(crate) fn truncate_line_to_width(line: Line, max_width: usize) -> Line {
         return Line::new();
     }
 
-    let Line { spans } = line;
+    let Line { spans, .. } = line;
     let mut used = 0usize;
     let mut spans_out: Vec<Span> = Vec::with_capacity(spans.len());
 
@@ -59,7 +59,7 @@ pub(crate) fn truncate_line_to_width(line: Line, max_width: usize) -> Line {
         break;
     }
 
-    Line { spans: spans_out }
+    Line::from_spans(spans_out)
 }
 
 /// Truncate a styled line to `max_width` and append an ellipsis on overflow.
@@ -80,10 +80,10 @@ pub(crate) fn truncate_line_with_ellipsis_if_overflow(
     }
 
     let truncated = truncate_line_to_width(line, max_width.saturating_sub(1));
-    let Line { mut spans } = truncated;
+    let Line { mut spans, .. } = truncated;
     let ellipsis_style = spans.last().map(|span| span.style).unwrap_or_default();
     spans.push(Span::styled("…", ellipsis_style));
-    Line { spans }
+    Line::from_spans(spans)
 }
 
 #[cfg(test)]

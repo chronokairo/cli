@@ -7,13 +7,10 @@
 //! pager wraps plain ratatui `Line`s and uses ratatui's row-based
 //! `Paragraph::scroll`, which matches the TUI's existing rendering model.
 
-use crossterm::event::{KeyCode, KeyEvent};
-use ratatui::{
-    buffer::Buffer,
-    layout::Rect,
-    style::Stylize,
-    text::{Line, Span, Text},
-    widgets::{Clear, Paragraph, Widget, Wrap},
+use crate::ui::engine::event::{KeyCode, KeyEvent};
+use crate::ui::engine::ratatui::text::Text;
+use crate::ui::engine::{
+    Buffer, Clear, Line, Paragraph, Rect, Span, Stylize, Widget, Wrap,
 };
 
 use crate::ui::live_wrap::RowBuilder;
@@ -234,7 +231,7 @@ impl PagerOverlay {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::{backend::TestBackend, Terminal};
+    use crate::ui::engine::{Terminal, TestBackend};
 
     fn pager_over_20_lines() -> PagerOverlay {
         PagerOverlay::new(
@@ -266,7 +263,7 @@ mod tests {
     #[test]
     fn close_sets_done() {
         let mut pager = pager_over_20_lines();
-        let key = KeyEvent::new(KeyCode::Esc, crossterm::event::KeyModifiers::NONE);
+        let key = KeyEvent::new(KeyCode::Esc, crate::ui::engine::KeyModifiers::NONE);
         assert!(pager.handle_event(&key));
         assert!(pager.is_done());
     }
@@ -274,8 +271,8 @@ mod tests {
     #[test]
     fn scroll_down_then_up() {
         let mut pager = pager_over_20_lines();
-        let down = KeyEvent::new(KeyCode::Down, crossterm::event::KeyModifiers::NONE);
-        let up = KeyEvent::new(KeyCode::Up, crossterm::event::KeyModifiers::NONE);
+        let down = KeyEvent::new(KeyCode::Down, crate::ui::engine::KeyModifiers::NONE);
+        let up = KeyEvent::new(KeyCode::Up, crate::ui::engine::KeyModifiers::NONE);
         pager.handle_event(&down);
         pager.handle_event(&down);
         assert_eq!(pager.scroll_offset, 2);
@@ -328,3 +325,4 @@ mod tests {
             .unwrap();
     }
 }
+

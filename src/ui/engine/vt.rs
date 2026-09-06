@@ -2,6 +2,27 @@
 //! Based on microsoft/edit architecture (zero external dependencies).
 
 use std::fmt::Write;
+use std::marker::PhantomData;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Modifier(pub u16);
+
+impl Modifier {
+    pub const BOLD: Modifier = Modifier(1);
+    pub const DIM: Modifier = Modifier(2);
+    pub const ITALIC: Modifier = Modifier(4);
+    pub const UNDERLINED: Modifier = Modifier(8);
+    pub const REVERSED: Modifier = Modifier(16);
+    pub const CROSSED_OUT: Modifier = Modifier(32);
+    pub const EMPTY: Modifier = Modifier(0);
+}
+
+impl std::ops::BitOr for Modifier {
+    type Output = Self;
+    fn bitor(self, rhs: Self) -> Self {
+        Modifier(self.0 | rhs.0)
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Color {
@@ -14,6 +35,14 @@ pub enum Color {
     Magenta,
     Cyan,
     White,
+    Gray,
+    DarkGray,
+    LightRed,
+    LightGreen,
+    LightYellow,
+    LightBlue,
+    LightMagenta,
+    LightCyan,
     BrightBlack,
     BrightRed,
     BrightGreen,
@@ -84,6 +113,24 @@ impl Style {
         self.reverse = true;
         self
     }
+
+    pub fn add_modifier(mut self, m: Modifier) -> Self {
+        if (m.0 & Modifier::BOLD.0) != 0 { self.bold = true; }
+        if (m.0 & Modifier::DIM.0) != 0 { self.dim = true; }
+        if (m.0 & Modifier::ITALIC.0) != 0 { self.italic = true; }
+        if (m.0 & Modifier::UNDERLINED.0) != 0 { self.underline = true; }
+        if (m.0 & Modifier::REVERSED.0) != 0 { self.reverse = true; }
+        self
+    }
+
+    pub fn remove_modifier(mut self, m: Modifier) -> Self {
+        if (m.0 & Modifier::BOLD.0) != 0 { self.bold = false; }
+        if (m.0 & Modifier::DIM.0) != 0 { self.dim = false; }
+        if (m.0 & Modifier::ITALIC.0) != 0 { self.italic = false; }
+        if (m.0 & Modifier::UNDERLINED.0) != 0 { self.underline = false; }
+        if (m.0 & Modifier::REVERSED.0) != 0 { self.reverse = false; }
+        self
+    }
 }
 
 pub struct Vt;
@@ -146,13 +193,14 @@ impl Vt {
                 Color::Magenta => out.push_str(";35"),
                 Color::Cyan => out.push_str(";36"),
                 Color::White => out.push_str(";37"),
-                Color::BrightBlack => out.push_str(";90"),
-                Color::BrightRed => out.push_str(";91"),
-                Color::BrightGreen => out.push_str(";92"),
-                Color::BrightYellow => out.push_str(";93"),
-                Color::BrightBlue => out.push_str(";94"),
-                Color::BrightMagenta => out.push_str(";95"),
-                Color::BrightCyan => out.push_str(";96"),
+                Color::Gray => out.push_str(";37"),
+                Color::DarkGray | Color::BrightBlack => out.push_str(";90"),
+                Color::LightRed | Color::BrightRed => out.push_str(";91"),
+                Color::LightGreen | Color::BrightGreen => out.push_str(";92"),
+                Color::LightYellow | Color::BrightYellow => out.push_str(";93"),
+                Color::LightBlue | Color::BrightBlue => out.push_str(";94"),
+                Color::LightMagenta | Color::BrightMagenta => out.push_str(";95"),
+                Color::LightCyan | Color::BrightCyan => out.push_str(";96"),
                 Color::BrightWhite => out.push_str(";97"),
                 Color::Indexed(i) => {
                     let _ = write!(out, ";38;5;{}", i);
@@ -173,14 +221,14 @@ impl Vt {
                 Color::Blue => out.push_str(";44"),
                 Color::Magenta => out.push_str(";45"),
                 Color::Cyan => out.push_str(";46"),
-                Color::White => out.push_str(";47"),
-                Color::BrightBlack => out.push_str(";100"),
-                Color::BrightRed => out.push_str(";101"),
-                Color::BrightGreen => out.push_str(";102"),
-                Color::BrightYellow => out.push_str(";103"),
-                Color::BrightBlue => out.push_str(";104"),
-                Color::BrightMagenta => out.push_str(";105"),
-                Color::BrightCyan => out.push_str(";106"),
+                Color::White | Color::Gray => out.push_str(";47"),
+                Color::DarkGray | Color::BrightBlack => out.push_str(";100"),
+                Color::LightRed | Color::BrightRed => out.push_str(";101"),
+                Color::LightGreen | Color::BrightGreen => out.push_str(";102"),
+                Color::LightYellow | Color::BrightYellow => out.push_str(";103"),
+                Color::LightBlue | Color::BrightBlue => out.push_str(";104"),
+                Color::LightMagenta | Color::BrightMagenta => out.push_str(";105"),
+                Color::LightCyan | Color::BrightCyan => out.push_str(";106"),
                 Color::BrightWhite => out.push_str(";107"),
                 Color::Indexed(i) => {
                     let _ = write!(out, ";48;5;{}", i);
@@ -196,16 +244,18 @@ impl Vt {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Span {
+pub struct Span<'a> {
     pub content: String,
     pub style: Style,
+    _marker: PhantomData<&'a ()>,
 }
 
-impl Span {
+impl<'a> Span<'a> {
     pub fn raw<S: Into<String>>(content: S) -> Self {
         Self {
             content: content.into(),
             style: Style::default(),
+            _marker: PhantomData,
         }
     }
 
@@ -213,58 +263,74 @@ impl Span {
         Self {
             content: content.into(),
             style,
+            _marker: PhantomData,
         }
+    }
+}
+
+impl<'a> From<&'a str> for Span<'a> {
+    fn from(s: &'a str) -> Self {
+        Self::raw(s)
+    }
+}
+
+impl<'a> From<String> for Span<'a> {
+    fn from(s: String) -> Self {
+        Self::raw(s)
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
-pub struct Line {
-    pub spans: Vec<Span>,
+pub struct Line<'a> {
+    pub spans: Vec<Span<'a>>,
+    _marker: PhantomData<&'a ()>,
 }
 
-impl Line {
+impl<'a> Line<'a> {
     pub fn new() -> Self {
-        Self { spans: Vec::new() }
+        Self { spans: Vec::new(), _marker: PhantomData }
     }
 
-    pub fn from_spans(spans: Vec<Span>) -> Self {
-        Self { spans }
+    pub fn from_spans(spans: Vec<Span<'a>>) -> Self {
+        Self { spans, _marker: PhantomData }
     }
 
-    pub fn push(&mut self, span: Span) {
+    pub fn push(&mut self, span: Span<'a>) {
         self.spans.push(span);
     }
 }
 
-impl From<String> for Line {
+impl<'a> From<String> for Line<'a> {
     fn from(s: String) -> Self {
         Self {
             spans: vec![Span::raw(s)],
+            _marker: PhantomData,
         }
     }
 }
 
-impl From<&str> for Line {
-    fn from(s: &str) -> Self {
+impl<'a> From<&'a str> for Line<'a> {
+    fn from(s: &'a str) -> Self {
         Self {
             spans: vec![Span::raw(s)],
+            _marker: PhantomData,
         }
     }
 }
 
-impl From<Span> for Line {
-    fn from(span: Span) -> Self {
-        Self { spans: vec![span] }
+impl<'a> From<Span<'a>> for Line<'a> {
+    fn from(span: Span<'a>) -> Self {
+        Self { spans: vec![span], _marker: PhantomData }
     }
 }
 
-impl From<Vec<Span>> for Line {
-    fn from(spans: Vec<Span>) -> Self {
-        Self { spans }
+impl<'a> From<Vec<Span<'a>>> for Line<'a> {
+    fn from(spans: Vec<Span<'a>>) -> Self {
+        Self { spans, _marker: PhantomData }
     }
 }
 
-impl std::fmt::Display for Line {
+impl<'a> std::fmt::Display for Line<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for span in &self.spans {
             write!(f, "{}", span.content)?;
@@ -272,4 +338,3 @@ impl std::fmt::Display for Line {
         Ok(())
     }
 }
-

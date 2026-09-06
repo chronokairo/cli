@@ -1,4 +1,4 @@
-use crossterm::{
+use crate::ui::engine::crossterm::{
     cursor::Show,
     event::{
         self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
@@ -7,7 +7,7 @@ use crossterm::{
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen},
 };
-use ratatui::{
+use crate::ui::engine::ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -1524,7 +1524,7 @@ struct TerminalGuard {
 
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
-        let _ = crossterm::terminal::disable_raw_mode();
+        let _ = crate::ui::engine::crossterm::terminal::disable_raw_mode();
         let _ = execute!(self.stdout, LeaveAlternateScreen, DisableMouseCapture, Show);
     }
 }
@@ -2703,7 +2703,7 @@ fn update_info_sections(app: &mut App, _state: &AgentState) {
     );
 }
 
-fn draw<B: ratatui::backend::Backend>(
+fn draw<B: crate::ui::engine::ratatui::backend::Backend>(
     f: &mut Terminal<B>,
     app: &App,
 ) -> Result<(), Box<dyn Error>> {
@@ -3022,7 +3022,7 @@ fn draw<B: ratatui::backend::Backend>(
                 height: popup_h,
             };
             f.render_widget(Clear, area);
-            let mut list_state = ratatui::widgets::ListState::default();
+            let mut list_state = crate::ui::engine::ratatui::widgets::ListState::default();
             list_state.select(Some(selected));
             let list = List::new(items)
                 .block(Block::default().title(title).borders(Borders::ALL))
@@ -4146,12 +4146,12 @@ fn format_elapsed(d: Duration) -> String {
 }
 
 fn enable_raw_mode() -> Result<(), Box<dyn Error>> {
-    crossterm::terminal::enable_raw_mode()?;
+    crate::ui::engine::crossterm::terminal::enable_raw_mode()?;
     Ok(())
 }
 
 fn disable_raw_mode() -> Result<(), Box<dyn Error>> {
-    crossterm::terminal::disable_raw_mode()?;
+    crate::ui::engine::crossterm::terminal::disable_raw_mode()?;
     Ok(())
 }
 
@@ -4710,8 +4710,8 @@ mod tests {
 
     #[test]
     fn count_wrapped_lines_counts_visual_rows() {
-        use ratatui::text::Line;
-        use ratatui::text::Span;
+        use crate::ui::engine::ratatui::text::Line;
+        use crate::ui::engine::ratatui::text::Span;
         // A 100-char unbroken run wraps to 2 visual rows at width 80
         // (80 chars on the first row, the remaining 20 on the second).
         let lines = vec![Line::from(Span::raw("x".repeat(100)))];
@@ -4720,8 +4720,8 @@ mod tests {
 
     #[test]
     fn count_wrapped_lines_matches_ratatui_for_prefixed_lines() {
-        use ratatui::text::Line;
-        use ratatui::text::Span;
+        use crate::ui::engine::ratatui::text::Line;
+        use crate::ui::engine::ratatui::text::Span;
         // Prefix span + content span are concatenated WITHOUT a separator,
         // so "• " + 78 chars is exactly one visual row at width 80. A
         // hand-rolled counter inserting a virtual space would count 2.
@@ -4743,8 +4743,8 @@ mod tests {
 
     #[test]
     fn count_wrapped_lines_counts_multiple_lines() {
-        use ratatui::text::Line;
-        use ratatui::text::Span;
+        use crate::ui::engine::ratatui::text::Line;
+        use crate::ui::engine::ratatui::text::Span;
         let lines = vec![
             Line::from(Span::raw("x".repeat(80))),
             Line::from(Span::raw("y".repeat(80))),
@@ -4872,8 +4872,8 @@ mod tests {
 
     #[test]
     fn reflow_renders_long_line_within_width() {
-        use ratatui::backend::TestBackend;
-        use ratatui::Terminal;
+        use crate::ui::engine::ratatui::backend::TestBackend;
+        use crate::ui::engine::ratatui::Terminal;
         let mut app = App::new("model");
         app.streaming_assistant = false;
         app.messages
@@ -4912,8 +4912,8 @@ mod tests {
 
     #[test]
     fn resize_rerenders_without_panic_and_respects_new_width() {
-        use ratatui::backend::TestBackend;
-        use ratatui::Terminal;
+        use crate::ui::engine::ratatui::backend::TestBackend;
+        use crate::ui::engine::ratatui::Terminal;
         let mut app = App::new("model");
         app.streaming_assistant = false;
         app.messages
@@ -4999,4 +4999,5 @@ mod tests {
         assert!(display_width(&cleaned) <= 25);
     }
 }
+
 
