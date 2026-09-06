@@ -7,4 +7,4 @@ pub mod pty;
 pub mod server;
 pub mod session;
 pub mod shell;
-pub mod websocket;
+pub mod ws;

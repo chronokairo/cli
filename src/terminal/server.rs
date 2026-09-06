@@ -1,4 +1,4 @@
-//! HTTP + WebSocket server exposing a real PTY in the browser.
+//! HTTP + WebSocket server exposing a real PTY in the browser without Axum.
 //!
 //! Routes:
 //!   GET /    → xterm.js single-page terminal
@@ -10,27 +10,18 @@
 //!   server → client: binary frame = terminal output bytes
 
 use super::pty::TerminalSession;
-use axum::{
-    extract::{
-        ws::{Message, WebSocket, WebSocketUpgrade},
-        State,
-    },
-    response::{Html, IntoResponse, Response},
-    routing::get,
-    Router,
-};
-
+use super::ws::{compute_accept, WsMessage, WsStream};
 use serde::Deserialize;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
 
 const INDEX_HTML: &str = include_str!("index.html");
 
 #[derive(Clone)]
 struct AppState {
-    /// argv[0] is the program (e.g. `anamnesic tui`, `pwsh`).
     argv: Arc<Vec<String>>,
-    /// Working directory for the spawned session.
     cwd: PathBuf,
 }
 
@@ -52,31 +43,98 @@ pub async fn serve(addr: &str, port: u16, argv: Vec<String>, cwd: PathBuf) -> cr
         cwd,
     };
 
-    let app = Router::new()
-        .route("/", get(index))
-        .route("/ws", get(ws_handler))
-        .with_state(state);
-
-    let listener = tokio::net::TcpListener::bind((addr, port)).await?;
+    let listener = TcpListener::bind((addr, port)).await?;
     crate::cki_info!("terminal server listening on http://{addr}:{port}");
-    axum::serve(listener, app).await?;
+
+    loop {
+        let (stream, peer_addr) = match listener.accept().await {
+            Ok(conn) => conn,
+            Err(e) => {
+                crate::cki_warn!("TCP accept failed: {e}");
+                continue;
+            }
+        };
+
+        let state = state.clone();
+        tokio::spawn(async move {
+            if let Err(err) = handle_connection(stream, state).await {
+                crate::cki_debug!("connection from {peer_addr} closed: {err}");
+            }
+        });
+    }
+}
+
+async fn handle_connection(mut stream: TcpStream, state: AppState) -> std::io::Result<()> {
+    let mut buf = [0u8; 4096];
+    let n = stream.read(&mut buf).await?;
+    if n == 0 {
+        return Ok(());
+    }
+
+    let req_str = String::from_utf8_lossy(&buf[..n]);
+    let mut lines = req_str.lines();
+    let request_line = lines.next().unwrap_or("");
+    let mut parts = request_line.split_whitespace();
+    let method = parts.next().unwrap_or("");
+    let path = parts.next().unwrap_or("");
+
+    if method != "GET" {
+        let resp = "HTTP/1.1 405 Method Not Allowed\r\nContent-Length: 0\r\n\r\n";
+        stream.write_all(resp.as_bytes()).await?;
+        return Ok(());
+    }
+
+    if path == "/" || path == "/index.html" {
+        let body = INDEX_HTML.as_bytes();
+        let headers = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        );
+        stream.write_all(headers.as_bytes()).await?;
+        stream.write_all(body).await?;
+        stream.flush().await?;
+        return Ok(());
+    }
+
+    if path == "/ws" {
+        let mut ws_key = None;
+        for line in lines {
+            let lower = line.to_lowercase();
+            if lower.starts_with("sec-websocket-key:") {
+                let key_part = line["sec-websocket-key:".len()..].trim();
+                ws_key = Some(key_part.to_string());
+                break;
+            }
+        }
+
+        if let Some(key) = ws_key {
+            let accept = compute_accept(&key);
+            let handshake_response = format!(
+                "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {}\r\n\r\n",
+                accept
+            );
+            stream.write_all(handshake_response.as_bytes()).await?;
+            stream.flush().await?;
+
+            let ws_stream = WsStream::new(stream);
+            session(ws_stream, state).await;
+            return Ok(());
+        } else {
+            let resp = "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n";
+            stream.write_all(resp.as_bytes()).await?;
+            return Ok(());
+        }
+    }
+
+    let resp = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n";
+    stream.write_all(resp.as_bytes()).await?;
     Ok(())
 }
 
-async fn index() -> impl IntoResponse {
-    Html(INDEX_HTML)
-}
-
-async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> Response {
-    ws.on_upgrade(move |socket| session(socket, state))
-}
-
-/// Bridge one browser connection to a PTY session.
-async fn session(socket: WebSocket, state: AppState) {
-    // First frame is the initial resize so the PTY starts at browser size.
-    let mut socket = socket;
+/// Bridge one browser WebSocket connection to a PTY session.
+async fn session(mut socket: WsStream<TcpStream>, state: AppState) {
     let (cols, rows) = match socket.recv().await {
-        Some(Ok(Message::Text(text))) => match serde_json::from_str::<ResizeMsg>(&text) {
+        Ok(Some(WsMessage::Text(text))) => match serde_json::from_str::<ResizeMsg>(&text) {
             Ok(msg) => (msg.resize.cols.max(20), msg.resize.rows.max(5)),
             Err(_) => (120, 30),
         },
@@ -96,9 +154,7 @@ async fn session(socket: WebSocket, state: AppState) {
                 Ok(s) => s,
                 Err(err) => {
                     let _ = socket
-                        .send(Message::Text(
-                            format!("failed to spawn terminal: {err}").into(),
-                        ))
+                        .send_text(&format!("failed to spawn terminal: {err}"))
                         .await;
                     return;
                 }
@@ -108,7 +164,6 @@ async fn session(socket: WebSocket, state: AppState) {
 
     crate::cki_info!("terminal session started: {:?}", state.argv);
 
-    // Forward output → browser.
     let (out_tx, mut out_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(64);
     let session_out = session.clone_read_handle();
     let output_task = tokio::spawn(async move {
@@ -127,26 +182,25 @@ async fn session(socket: WebSocket, state: AppState) {
         }
     });
 
-    // Forward input + resize → PTY.
     loop {
         tokio::select! {
             Some(data) = out_rx.recv() => {
-                if socket.send(Message::Binary(data.into())).await.is_err() {
+                if socket.send_binary(&data).await.is_err() {
                     break;
                 }
             }
-            Some(msg) = socket.recv() => match msg {
-                Ok(Message::Binary(data)) => {
+            msg = socket.recv() => match msg {
+                Ok(Some(WsMessage::Binary(data))) => {
                     let _ = session.write_input(&data);
                 }
-                Ok(Message::Text(text)) => {
+                Ok(Some(WsMessage::Text(text))) => {
                     if let Ok(msg) = serde_json::from_str::<ResizeMsg>(&text) {
                         let _ = session.resize(msg.resize.cols.max(20), msg.resize.rows.max(5));
                     } else {
                         let _ = session.write_input(text.as_bytes());
                     }
                 }
-                Ok(Message::Close(_)) | Err(_) => break,
+                Ok(Some(WsMessage::Close)) | Ok(None) | Err(_) => break,
                 _ => {}
             }
         }

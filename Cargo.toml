@@ -20,6 +20,5 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 ratatui = { version = "0.29", features = ["unstable-rendered-line-info"] }
 crossterm = "0.28"
     ocl = { version = "0.19", optional = true }
-axum = { version = "0.8", features = ["ws"] }
 portable-pty = "0.8"
 
