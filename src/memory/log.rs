@@ -1,8 +1,9 @@
-use rusqlite::Connection;
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, RwLock};
 
 /// Summary metadata for a saved conversation, shown in the resume picker.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionInfo {
     pub id: i64,
     pub timestamp: String,
@@ -20,9 +21,67 @@ pub struct VectorHit {
     pub score: f64,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SessionRecord {
+    id: i64,
+    timestamp: String,
+    summary: String,
+    context: String,
+    workspace: String,
+    model: String,
+    updated_at: String,
+    status: String,
+    message_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct MessageRecord {
+    session_id: i64,
+    seq: i64,
+    role: String,
+    content: String,
+    created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct VectorRecord {
+    id: i64,
+    session_id: i64,
+    text: String,
+    source: String,
+    created_at: String,
+    embedding: Vec<f32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct DecisionRecord {
+    id: i64,
+    timestamp: String,
+    decision: String,
+    reason: String,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+struct MemoryStore {
+    #[serde(default)]
+    next_session_id: i64,
+    #[serde(default)]
+    next_vector_id: i64,
+    #[serde(default)]
+    next_decision_id: i64,
+    #[serde(default)]
+    sessions: Vec<SessionRecord>,
+    #[serde(default)]
+    messages: Vec<MessageRecord>,
+    #[serde(default)]
+    vectors: Vec<VectorRecord>,
+    #[serde(default)]
+    decisions: Vec<DecisionRecord>,
+}
+
 pub struct LongTermMemory {
-    conn: Connection,
     path: PathBuf,
+    store: Arc<RwLock<MemoryStore>>,
 }
 
 impl LongTermMemory {
@@ -30,88 +89,31 @@ impl LongTermMemory {
         if let Some(parent) = db_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let conn = Connection::open(&db_path)?;
-        conn.busy_timeout(std::time::Duration::from_secs(5))?;
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS sessions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                timestamp TEXT,
-                summary TEXT,
-                context TEXT
-            );
-            CREATE TABLE IF NOT EXISTS decisions (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                timestamp TEXT,
-                decision TEXT,
-                reason TEXT
-            );
-            CREATE TABLE IF NOT EXISTS session_messages (
-                session_id INTEGER NOT NULL,
-                seq INTEGER NOT NULL,
-                role TEXT NOT NULL,
-                content TEXT NOT NULL,
-                created_at TEXT,
-                PRIMARY KEY (session_id, seq)
-            );
-            CREATE INDEX IF NOT EXISTS idx_session_messages_session ON session_messages(session_id);
-            CREATE TABLE IF NOT EXISTS memory_vectors (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id INTEGER NOT NULL,
-                text TEXT NOT NULL,
-                source TEXT,
-                created_at TEXT,
-                embedding BLOB NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_memory_vectors_session ON memory_vectors(session_id);",
-        )?;
-        Self::migrate_sessions_table(&conn)?;
+        let store = if db_path.exists() {
+            if let Ok(content) = std::fs::read_to_string(&db_path) {
+                serde_json::from_str::<MemoryStore>(&content).unwrap_or_default()
+            } else {
+                MemoryStore::default()
+            }
+        } else {
+            MemoryStore::default()
+        };
+
         Ok(LongTermMemory {
-            conn,
             path: db_path,
+            store: Arc::new(RwLock::new(store)),
         })
     }
 
-    /// Add metadata columns that older session rows lack. Applies only to the
-    /// local SQLite database, so the `ALTER TABLE` calls are idempotent.
-    /// The migration is race-safe: a concurrent open of the same file may add
-    /// a column between the `PRAGMA` read and the `ALTER`, so a failed `ALTER`
-    /// is retried through a fresh column read instead of aborting.
-    fn migrate_sessions_table(conn: &Connection) -> crate::error::Result<()> {
-        let read_columns = || -> crate::error::Result<Vec<String>> {
-            let mut columns = Vec::new();
-            let mut stmt = conn.prepare("PRAGMA table_info(sessions)")?;
-            let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
-            for row in rows {
-                columns.push(row?);
-            }
-            Ok(columns)
-        };
-        let mut columns = read_columns()?;
-        for (name, definition) in [
-            ("workspace", "TEXT"),
-            ("model", "TEXT"),
-            ("updated_at", "TEXT"),
-            ("status", "TEXT DEFAULT 'active'"),
-            ("message_count", "INTEGER DEFAULT 0"),
-        ] {
-            if columns.iter().any(|c| c == name) {
-                continue;
-            }
-            let alter = || {
-                conn.execute_batch(&format!(
-                    "ALTER TABLE sessions ADD COLUMN {name} {definition};"
-                ))
-            };
-            match alter() {
-                Ok(()) => columns.push(name.to_string()),
-                Err(_) => {
-                    columns = read_columns()?;
-                    if !columns.iter().any(|c| c == name) {
-                        return alter().map_err(crate::error::Error::from);
-                    }
-                }
-            }
+    fn persist(&self, store: &MemoryStore) -> crate::error::Result<()> {
+        if let Some(parent) = self.path.parent() {
+            let _ = std::fs::create_dir_all(parent);
         }
+        let data = serde_json::to_vec_pretty(store).map_err(|e| crate::error::message(e.to_string()))?;
+        let temp_path = self.path.with_extension("tmp");
+        std::fs::write(&temp_path, &data)?;
+        let _ = std::fs::remove_file(&self.path);
+        std::fs::rename(&temp_path, &self.path)?;
         Ok(())
     }
 
@@ -122,17 +124,27 @@ impl LongTermMemory {
     /// Create a new session record and return its id.
     pub fn start_session(&self, workspace: &str, model: &str) -> crate::error::Result<i64> {
         let now = crate::types::time::now_local_rfc3339();
-        self.conn.execute(
-            "INSERT INTO sessions (timestamp, summary, context, workspace, model, updated_at, status, message_count)
-             VALUES (?1, '', '', ?2, ?3, ?4, 'active', 0)",
-            rusqlite::params![now, workspace, model, now],
-        )?;
-        Ok(self.conn.last_insert_rowid())
+        let mut store = self.store.write().map_err(|_| crate::error::message("lock poisoned"))?;
+        store.next_session_id += 1;
+        let id = store.next_session_id;
+
+        store.sessions.push(SessionRecord {
+            id,
+            timestamp: now.clone(),
+            summary: String::new(),
+            context: String::new(),
+            workspace: workspace.to_string(),
+            model: model.to_string(),
+            updated_at: now,
+            status: "active".to_string(),
+            message_count: 0,
+        });
+
+        self.persist(&store)?;
+        Ok(id)
     }
 
-    /// Append transcript records `(seq, role, content)` to a session. Rows are
-    /// keyed on `(session_id, seq)` so re-writing an already-persisted seq is a
-    /// no-op — transcripts are append-only and survive compaction.
+    /// Append transcript records `(seq, role, content)` to a session.
     pub fn append_messages(
         &self,
         session_id: i64,
@@ -141,30 +153,36 @@ impl LongTermMemory {
         if messages.is_empty() {
             return Ok(());
         }
-        let tx = self.conn.unchecked_transaction()?;
         let now = crate::types::time::now_local_rfc3339();
-        {
-            let mut stmt = tx.prepare(
-                "INSERT OR IGNORE INTO session_messages (session_id, seq, role, content, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
-            )?;
-            for (seq, role, content) in messages {
-                stmt.execute(rusqlite::params![session_id, seq, role, content, now])?;
+        let mut store = self.store.write().map_err(|_| crate::error::message("lock poisoned"))?;
+
+        for (seq, role, content) in messages {
+            let already_exists = store
+                .messages
+                .iter()
+                .any(|m| m.session_id == session_id && m.seq == *seq);
+            if !already_exists {
+                store.messages.push(MessageRecord {
+                    session_id,
+                    seq: *seq,
+                    role: role.clone(),
+                    content: content.clone(),
+                    created_at: now.clone(),
+                });
             }
         }
-        tx.execute(
-            "UPDATE sessions SET
-                updated_at = ?1,
-                message_count = (SELECT COUNT(*) FROM session_messages WHERE session_id = ?2)
-             WHERE id = ?2",
-            rusqlite::params![now, session_id],
-        )?;
-        tx.commit()?;
+
+        let count = store.messages.iter().filter(|m| m.session_id == session_id).count();
+        if let Some(session) = store.sessions.iter_mut().find(|s| s.id == session_id) {
+            session.updated_at = now;
+            session.message_count = count;
+        }
+
+        self.persist(&store)?;
         Ok(())
     }
 
-    /// Refresh session metadata after a write: title (first user message),
-    /// compaction context, model, last-activity timestamp and message count.
+    /// Refresh session metadata after a write: title, context, model, etc.
     pub fn update_session(
         &self,
         session_id: i64,
@@ -172,22 +190,25 @@ impl LongTermMemory {
         context: &str,
         model: &str,
     ) -> crate::error::Result<()> {
-        self.conn.execute(
-            "UPDATE sessions SET
-                summary = COALESCE(NULLIF(?1, ''), summary),
-                context = ?2,
-                model = ?3,
-                updated_at = ?4,
-                message_count = (SELECT COUNT(*) FROM session_messages WHERE session_id = ?5)
-             WHERE id = ?5",
-            rusqlite::params![title, context, model, crate::types::time::now_local_rfc3339(), session_id],
-        )?;
+        let now = crate::types::time::now_local_rfc3339();
+        let mut store = self.store.write().map_err(|_| crate::error::message("lock poisoned"))?;
+
+        let count = store.messages.iter().filter(|m| m.session_id == session_id).count();
+        if let Some(session) = store.sessions.iter_mut().find(|s| s.id == session_id) {
+            if !title.trim().is_empty() {
+                session.summary = title.to_string();
+            }
+            session.context = context.to_string();
+            session.model = model.to_string();
+            session.updated_at = now;
+            session.message_count = count;
+        }
+
+        self.persist(&store)?;
         Ok(())
     }
 
-    /// Persist an embedding for a piece of assistant text so `memory_search`
-    /// can recall it later. `embedding` should be L2-normalized so a plain dot
-    /// product equals cosine similarity.
+    /// Persist an embedding for memory recall.
     pub fn store_vector(
         &self,
         session_id: i64,
@@ -195,45 +216,42 @@ impl LongTermMemory {
         text: &str,
         embedding: &[f32],
     ) -> crate::error::Result<()> {
-        let mut blob = Vec::with_capacity(embedding.len() * 4);
-        for value in embedding {
-            blob.extend_from_slice(&value.to_le_bytes());
-        }
-        self.conn.execute(
-            "INSERT INTO memory_vectors (session_id, text, source, created_at, embedding)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            rusqlite::params![session_id, text, source, crate::types::time::now_local_rfc3339(), blob],
-        )?;
+        let now = crate::types::time::now_local_rfc3339();
+        let mut store = self.store.write().map_err(|_| crate::error::message("lock poisoned"))?;
+        store.next_vector_id += 1;
+        let id = store.next_vector_id;
+
+        store.vectors.push(VectorRecord {
+            id,
+            session_id,
+            text: text.to_string(),
+            source: source.to_string(),
+            created_at: now,
+            embedding: embedding.to_vec(),
+        });
+
+        self.persist(&store)?;
         Ok(())
     }
 
-    /// Top-`k` vectors most similar to the (normalized) query embedding.
+    /// Top-`k` vectors most similar to query embedding.
     pub fn search_vectors(&self, query: &[f32], k: usize) -> crate::error::Result<Vec<VectorHit>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT text, source, embedding FROM memory_vectors")?;
-        let rows = stmt.query_map([], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, Vec<u8>>(2)?,
-            ))
-        })?;
+        let store = self.store.read().map_err(|_| crate::error::message("lock poisoned"))?;
         let mut hits: Vec<(f64, String, String)> = Vec::new();
-        for row in rows {
-            let (text, source, blob) = row?;
-            if blob.len() != query.len() * 4 {
+
+        for record in &store.vectors {
+            if record.embedding.len() != query.len() {
                 continue;
             }
             let mut dot = 0.0f64;
-            for (index, value) in blob.chunks_exact(4).enumerate() {
-                let element = f32::from_le_bytes([value[0], value[1], value[2], value[3]]);
-                dot += element as f64 * query[index] as f64;
+            for (index, val) in record.embedding.iter().enumerate() {
+                dot += *val as f64 * query[index] as f64;
             }
             if dot.is_finite() {
-                hits.push((dot, text, source));
+                hits.push((dot, record.text.clone(), record.source.clone()));
             }
         }
+
         hits.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
         Ok(hits
             .into_iter()
@@ -248,86 +266,82 @@ impl LongTermMemory {
 
     /// Recently active saved sessions for a workspace, newest first.
     pub fn list_sessions(&self, workspace: &str, limit: usize) -> crate::error::Result<Vec<SessionInfo>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, timestamp, updated_at, summary, message_count, model
-             FROM sessions
-             WHERE workspace = ?1 AND status = 'active' AND message_count > 0
-             ORDER BY updated_at DESC
-             LIMIT ?2",
-        )?;
-        let rows = stmt.query_map(rusqlite::params![workspace, limit as i64], |row| {
-            Ok(SessionInfo {
-                id: row.get(0)?,
-                timestamp: row.get(1)?,
-                updated_at: row.get(2)?,
-                summary: row.get(3)?,
-                message_count: row.get(4)?,
-                model: row.get(5)?,
+        let store = self.store.read().map_err(|_| crate::error::message("lock poisoned"))?;
+        let mut matched: Vec<&SessionRecord> = store
+            .sessions
+            .iter()
+            .filter(|s| s.workspace == workspace && s.status == "active" && s.message_count > 0)
+            .collect();
+
+        matched.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+
+        Ok(matched
+            .into_iter()
+            .take(limit)
+            .map(|s| SessionInfo {
+                id: s.id,
+                timestamp: s.timestamp.clone(),
+                updated_at: s.updated_at.clone(),
+                summary: s.summary.clone(),
+                message_count: s.message_count,
+                model: s.model.clone(),
             })
-        })?;
-        let mut result = Vec::new();
-        for row in rows {
-            result.push(row?);
-        }
-        Ok(result)
+            .collect())
     }
 
     /// Id of the most recently active session for a workspace, if any.
     pub fn latest_session(&self, workspace: &str) -> crate::error::Result<Option<i64>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id FROM sessions
-             WHERE workspace = ?1 AND status = 'active' AND message_count > 0
-             ORDER BY updated_at DESC LIMIT 1",
-        )?;
-        let mut rows = stmt.query_map(rusqlite::params![workspace], |row| row.get::<_, i64>(0))?;
-        Ok(rows.next().transpose()?)
+        let store = self.store.read().map_err(|_| crate::error::message("lock poisoned"))?;
+        let mut matched: Vec<&SessionRecord> = store
+            .sessions
+            .iter()
+            .filter(|s| s.workspace == workspace && s.status == "active" && s.message_count > 0)
+            .collect();
+
+        matched.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        Ok(matched.first().map(|s| s.id))
     }
 
     /// Full transcript of a session as `(seq, role, content)`, in order.
     pub fn load_session(&self, session_id: i64) -> crate::error::Result<Vec<(i64, String, String)>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT seq, role, content FROM session_messages WHERE session_id = ?1 ORDER BY seq",
-        )?;
-        let rows = stmt.query_map(rusqlite::params![session_id], |row| {
-            Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-            ))
-        })?;
-        let mut result = Vec::new();
-        for row in rows {
-            result.push(row?);
-        }
-        Ok(result)
+        let store = self.store.read().map_err(|_| crate::error::message("lock poisoned"))?;
+        let mut msgs: Vec<&MessageRecord> = store
+            .messages
+            .iter()
+            .filter(|m| m.session_id == session_id)
+            .collect();
+
+        msgs.sort_by_key(|m| m.seq);
+
+        Ok(msgs
+            .into_iter()
+            .map(|m| (m.seq, m.role.clone(), m.content.clone()))
+            .collect())
     }
 
     /// Stored compaction context for a session, if any.
     pub fn session_context(&self, session_id: i64) -> crate::error::Result<Option<String>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT context FROM sessions WHERE id = ?1")?;
-        let mut rows =
-            stmt.query_map(rusqlite::params![session_id], |row| row.get::<_, String>(0))?;
-        Ok(rows.next().transpose()?.filter(|s| !s.trim().is_empty()))
+        let store = self.store.read().map_err(|_| crate::error::message("lock poisoned"))?;
+        let context = store
+            .sessions
+            .iter()
+            .find(|s| s.id == session_id)
+            .map(|s| s.context.clone())
+            .filter(|s| !s.trim().is_empty());
+        Ok(context)
     }
 
     /// Remove a saved conversation entirely.
     pub fn delete_session(&self, session_id: i64) -> crate::error::Result<()> {
-        self.conn.execute(
-            "DELETE FROM session_messages WHERE session_id = ?1",
-            rusqlite::params![session_id],
-        )?;
-        self.conn.execute(
-            "DELETE FROM sessions WHERE id = ?1",
-            rusqlite::params![session_id],
-        )?;
+        let mut store = self.store.write().map_err(|_| crate::error::message("lock poisoned"))?;
+        store.messages.retain(|m| m.session_id != session_id);
+        store.vectors.retain(|v| v.session_id != session_id);
+        store.sessions.retain(|s| s.id != session_id);
+        self.persist(&store)?;
         Ok(())
     }
 
-    /// Legacy compatibility shim: create a one-off session record and store
-    /// `task` + `response` as a two-message transcript.  Used by CLI/planner
-    /// paths that do not go through the full persist workflow.
+    /// Legacy compatibility shim.
     pub fn save_session(&self, task: &str, response: &str) -> crate::error::Result<()> {
         let ws = self
             .path
@@ -346,35 +360,110 @@ impl LongTermMemory {
     }
 
     /// Return recently active sessions across all workspaces, newest first.
-    /// Used by the CLI `--resume` flag.
     pub fn get_recent_sessions(&self, limit: usize) -> crate::error::Result<Vec<(String, String)>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT updated_at, summary FROM sessions
-             WHERE status = 'active' AND message_count > 0
-             ORDER BY updated_at DESC LIMIT ?1",
-        )?;
-        let rows = stmt.query_map(rusqlite::params![limit as i64], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })?;
-        let mut result = Vec::new();
-        for row in rows {
-            result.push(row?);
-        }
-        Ok(result)
+        let store = self.store.read().map_err(|_| crate::error::message("lock poisoned"))?;
+        let mut matched: Vec<&SessionRecord> = store
+            .sessions
+            .iter()
+            .filter(|s| s.status == "active" && s.message_count > 0)
+            .collect();
+
+        matched.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+
+        Ok(matched
+            .into_iter()
+            .take(limit)
+            .map(|s| (s.updated_at.clone(), s.summary.clone()))
+            .collect())
     }
 
     pub fn save_decision(&self, decision: &str, reason: &str) -> crate::error::Result<()> {
-        self.conn.execute(
-            "INSERT INTO decisions (timestamp, decision, reason) VALUES (?1, ?2, ?3)",
-            rusqlite::params![crate::types::time::now_local_rfc3339(), decision, reason],
-        )?;
+        let now = crate::types::time::now_local_rfc3339();
+        let mut store = self.store.write().map_err(|_| crate::error::message("lock poisoned"))?;
+        store.next_decision_id += 1;
+        let id = store.next_decision_id;
+
+        store.decisions.push(DecisionRecord {
+            id,
+            timestamp: now,
+            decision: decision.to_string(),
+            reason: reason.to_string(),
+        });
+
+        self.persist(&store)?;
         Ok(())
+    }
+
+    /// Full-text search across active sessions and their messages.
+    pub fn search_memories(&self, query: &str, limit: usize) -> crate::error::Result<Vec<serde_json::Value>> {
+        let query_lower = query.to_lowercase();
+        let store = self.store.read().map_err(|_| crate::error::message("lock poisoned"))?;
+
+        let mut by_session = std::collections::HashMap::<i64, serde_json::Value>::new();
+
+        for session in store.sessions.iter().filter(|s| s.status == "active") {
+            let session_msgs: Vec<&MessageRecord> = store
+                .messages
+                .iter()
+                .filter(|m| m.session_id == session.id)
+                .collect();
+
+            let mut matched_content: Option<String> = None;
+            if session.summary.to_lowercase().contains(&query_lower) {
+                matched_content = Some(session.summary.clone());
+            } else {
+                for msg in &session_msgs {
+                    if msg.content.to_lowercase().contains(&query_lower) {
+                        matched_content = Some(msg.content.clone());
+                        break;
+                    }
+                }
+            }
+
+            if let Some(source) = matched_content {
+                let score = source.to_lowercase().matches(&query_lower).count().max(1) as f64;
+                let snippet = source.chars().take(240).collect::<String>();
+                let candidate = serde_json::json!({
+                    "sessionId": session.id,
+                    "session_id": session.id,
+                    "summary": session.summary,
+                    "snippet": snippet,
+                    "score": score,
+                    "timestamp": session.timestamp,
+                    "model": session.model,
+                    "message_count": session.message_count
+                });
+
+                let replace = by_session
+                    .get(&session.id)
+                    .and_then(|val| val.get("score"))
+                    .and_then(serde_json::Value::as_f64)
+                    .unwrap_or(0.0)
+                    < score;
+                if replace {
+                    by_session.insert(session.id, candidate);
+                }
+            }
+        }
+
+        let mut results = by_session.into_values().collect::<Vec<_>>();
+        results.sort_by(|a, b| {
+            b.get("score")
+                .and_then(serde_json::Value::as_f64)
+                .partial_cmp(&a.get("score").and_then(serde_json::Value::as_f64))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        results.truncate(limit);
+        Ok(results)
     }
 }
 
 impl Clone for LongTermMemory {
     fn clone(&self) -> Self {
-        Self::new(self.path.clone()).expect("failed to clone long-term memory connection")
+        Self {
+            path: self.path.clone(),
+            store: Arc::clone(&self.store),
+        }
     }
 }
 
@@ -386,7 +475,7 @@ mod tests {
         let dir =
             std::env::temp_dir().join(format!("anamnesic-memory-log-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        LongTermMemory::new(dir.join("memory.db")).unwrap()
+        LongTermMemory::new(dir.join("memory.json")).unwrap()
     }
 
     #[test]

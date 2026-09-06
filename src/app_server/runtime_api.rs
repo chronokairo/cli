@@ -190,34 +190,7 @@ fn search_memories(params: &Value) -> Result<Value, String> {
     if query.is_empty() { return Ok(json!([])); }
     let limit = params.get("limit").and_then(Value::as_u64).unwrap_or(10).clamp(1, 100) as usize;
     let memory = memory()?;
-    let connection = rusqlite::Connection::open(memory.path()).map_err(|error| error.to_string())?;
-    let mut statement = connection.prepare(
-        "SELECT s.id, COALESCE(s.summary,''), COALESCE(s.timestamp,''), COALESCE(s.model,''),
-                COALESCE(s.message_count,0), COALESCE(m.content,'')
-         FROM sessions s LEFT JOIN session_messages m ON m.session_id = s.id
-         WHERE s.status = 'active' AND (s.summary LIKE ?1 OR m.content LIKE ?1)
-         ORDER BY s.updated_at DESC LIMIT 500"
-    ).map_err(|error| error.to_string())?;
-    let pattern = format!("%{query}%");
-    let rows = statement.query_map([pattern], |row| Ok((
-        row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?,
-        row.get::<_, String>(3)?, row.get::<_, usize>(4)?, row.get::<_, String>(5)?,
-    ))).map_err(|error| error.to_string())?;
-    let query_lower = query.to_lowercase();
-    let mut by_session = std::collections::HashMap::<i64, Value>::new();
-    for row in rows.flatten() {
-        let (id, summary, timestamp, model, message_count, content) = row;
-        let source = if summary.to_lowercase().contains(&query_lower) { &summary } else { &content };
-        let score = source.to_lowercase().matches(&query_lower).count().max(1) as f64;
-        let snippet = source.chars().take(240).collect::<String>();
-        let candidate = json!({"sessionId": id, "session_id": id, "summary": summary, "snippet": snippet,
-            "score": score, "timestamp": timestamp, "model": model, "message_count": message_count});
-        let replace = by_session.get(&id).and_then(|value| value.get("score")).and_then(Value::as_f64).unwrap_or(0.0) < score;
-        if replace { by_session.insert(id, candidate); }
-    }
-    let mut results = by_session.into_values().collect::<Vec<_>>();
-    results.sort_by(|a, b| b.get("score").and_then(Value::as_f64).partial_cmp(&a.get("score").and_then(Value::as_f64)).unwrap_or(std::cmp::Ordering::Equal));
-    results.truncate(limit);
+    let results = memory.search_memories(query, limit).map_err(|error| error.to_string())?;
     Ok(Value::Array(results))
 }
 
