@@ -264,6 +264,92 @@ fn process_patch(workspace_root: &Path, patch_str: &str, write: bool) -> Result<
     Ok(results)
 }
 
+/// Computes a unified diff string between old_text and new_text using pure std.
+pub fn create_patch(old_text: &str, new_text: &str) -> String {
+    let old_lines: Vec<&str> = old_text.lines().collect();
+    let new_lines: Vec<&str> = new_text.lines().collect();
+
+    let n = old_lines.len();
+    let m = new_lines.len();
+
+    if n == 0 && m == 0 {
+        return String::new();
+    }
+
+    // Standard LCS dynamic programming table
+    let mut dp = vec![vec![0usize; m + 1]; n + 1];
+    for i in 0..n {
+        for j in 0..m {
+            if old_lines[i] == new_lines[j] {
+                dp[i + 1][j + 1] = dp[i][j] + 1;
+            } else {
+                dp[i + 1][j + 1] = dp[i + 1][j].max(dp[i][j + 1]);
+            }
+        }
+    }
+
+    // Backtrack to build diff operations: (Op, text)
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Op {
+        Equal,
+        Insert,
+        Delete,
+    }
+
+    let mut ops = Vec::new();
+    let mut i = n;
+    let mut j = m;
+
+    while i > 0 || j > 0 {
+        if i > 0 && j > 0 && old_lines[i - 1] == new_lines[j - 1] {
+            ops.push((Op::Equal, old_lines[i - 1]));
+            i -= 1;
+            j -= 1;
+        } else if j > 0 && (i == 0 || dp[i][j - 1] >= dp[i - 1][j]) {
+            ops.push((Op::Insert, new_lines[j - 1]));
+            j -= 1;
+        } else if i > 0 && (j == 0 || dp[i][j - 1] < dp[i - 1][j]) {
+            ops.push((Op::Delete, old_lines[i - 1]));
+            i -= 1;
+        }
+    }
+    ops.reverse();
+
+    // Check if there are any changes
+    if !ops.iter().any(|(op, _)| *op != Op::Equal) {
+        return String::new();
+    }
+
+    let mut output = String::new();
+    let old_count = n;
+    let new_count = m;
+    let old_start = if old_count > 0 { 1 } else { 0 };
+    let new_start = if new_count > 0 { 1 } else { 0 };
+
+    output.push_str(&format!("@@ -{old_start},{old_count} +{new_start},{new_count} @@\n"));
+    for (op, line) in ops {
+        match op {
+            Op::Equal => {
+                output.push(' ');
+                output.push_str(line);
+                output.push('\n');
+            }
+            Op::Delete => {
+                output.push('-');
+                output.push_str(line);
+                output.push('\n');
+            }
+            Op::Insert => {
+                output.push('+');
+                output.push_str(line);
+                output.push('\n');
+            }
+        }
+    }
+
+    output
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

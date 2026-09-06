@@ -25,14 +25,86 @@ impl ExecPolicy {
     pub fn load(path: &Path) -> Result<Self, String> {
         if !path.exists() { return Ok(Self::default()); }
         let content = std::fs::read_to_string(path).map_err(|error| error.to_string())?;
-        toml::from_str(&content).map_err(|error| error.to_string())
+        
+        let mut rules = Vec::new();
+        let mut in_rule = false;
+        let mut current_command = String::new();
+        let mut current_decision = Decision::Prompt;
+        let mut current_scope: Option<String> = None;
+        let mut current_justification: Option<String> = None;
+
+        let flush_rule = |rules: &mut Vec<ExecRule>, in_rule: bool, cmd: &str, dec: Decision, sc: Option<String>, just: Option<String>| {
+            if in_rule && !cmd.is_empty() {
+                rules.push(ExecRule {
+                    command: cmd.to_string(),
+                    decision: dec,
+                    scope: sc,
+                    justification: just,
+                });
+            }
+        };
+
+        for line in content.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+
+            if line == "[[rules]]" {
+                flush_rule(&mut rules, in_rule, &current_command, current_decision, current_scope.take(), current_justification.take());
+                in_rule = true;
+                current_command.clear();
+                current_decision = Decision::Prompt;
+                continue;
+            }
+
+            if in_rule {
+                if let Some((k, v)) = line.split_once('=') {
+                    let key = k.trim();
+                    let val = v.trim().trim_matches('"').trim_matches('\'');
+                    match key {
+                        "command" => current_command = val.to_string(),
+                        "decision" => {
+                            current_decision = match val.to_lowercase().as_str() {
+                                "allow" => Decision::Allow,
+                                "forbidden" => Decision::Forbidden,
+                                _ => Decision::Prompt,
+                            };
+                        }
+                        "scope" => current_scope = Some(val.to_string()),
+                        "justification" => current_justification = Some(val.to_string()),
+                        _ => {}
+                    }
+                }
+            }
+        }
+        flush_rule(&mut rules, in_rule, &current_command, current_decision, current_scope, current_justification);
+
+        Ok(Self { rules })
     }
 
     pub fn save(&self, path: &Path) -> Result<(), String> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
         }
-        let content = toml::to_string_pretty(self).map_err(|error| error.to_string())?;
+        let mut content = String::new();
+        for rule in &self.rules {
+            content.push_str("[[rules]]\n");
+            content.push_str(&format!("command = \"{}\"\n", rule.command));
+            let dec_str = match rule.decision {
+                Decision::Allow => "allow",
+                Decision::Forbidden => "forbidden",
+                Decision::Prompt => "prompt",
+            };
+            content.push_str(&format!("decision = \"{dec_str}\"\n"));
+            if let Some(ref sc) = rule.scope {
+                content.push_str(&format!("scope = \"{sc}\"\n"));
+            }
+            if let Some(ref j) = rule.justification {
+                content.push_str(&format!("justification = \"{j}\"\n"));
+            }
+            content.push('\n');
+        }
         std::fs::write(path, content).map_err(|error| error.to_string())
     }
 
@@ -77,5 +149,40 @@ mod tests {
             ExecRule { command: "cargo test".into(), decision: Decision::Forbidden, scope: None, justification: None },
         ]};
         assert_eq!(policy.check(&["cargo".into(), "test".into()], None).0, Decision::Forbidden);
+    }
+
+    #[test]
+    fn test_save_and_load_roundtrip() {
+        let temp_dir = std::env::temp_dir().join(format!("chronokairo_exec_policy_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        let path = temp_dir.join("exec_policy.toml");
+
+        let policy = ExecPolicy { rules: vec![
+            ExecRule {
+                command: "git push".into(),
+                decision: Decision::Forbidden,
+                scope: Some("workspace:main".into()),
+                justification: Some("No direct push to main".into()),
+            },
+            ExecRule {
+                command: "cargo check".into(),
+                decision: Decision::Allow,
+                scope: None,
+                justification: None,
+            },
+        ]};
+
+        policy.save(&path).unwrap();
+        let loaded = ExecPolicy::load(&path).unwrap();
+
+        assert_eq!(loaded.rules.len(), 2);
+        assert_eq!(loaded.rules[0].command, "git push");
+        assert_eq!(loaded.rules[0].decision, Decision::Forbidden);
+        assert_eq!(loaded.rules[0].scope.as_deref(), Some("workspace:main"));
+        assert_eq!(loaded.rules[0].justification.as_deref(), Some("No direct push to main"));
+        assert_eq!(loaded.rules[1].command, "cargo check");
+        assert_eq!(loaded.rules[1].decision, Decision::Allow);
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }

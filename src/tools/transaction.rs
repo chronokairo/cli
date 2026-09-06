@@ -177,7 +177,7 @@ impl WorkspaceTransaction {
             (Some(old), Some(new)) => {
                 let old_text = String::from_utf8_lossy(old);
                 let new_text = String::from_utf8_lossy(&new);
-                let patch = diffy::create_patch(&old_text, &new_text);
+                let patch = crate::tools::patch::create_patch(&old_text, &new_text);
                 Ok(Some(format!("{header}{patch}")))
             }
             (None, Some(new)) => {
@@ -234,58 +234,133 @@ fn scan_workspace(root: &Path, max_bytes: usize) -> anyhow::Result<BTreeMap<Path
     );
     let started = std::time::Instant::now();
 
-    // Walk the workspace respecting `.gitignore` (plus `.git/info/exclude` and
-    // the user's global excludes, like git itself) so artifacts a project
-    // chooses to ignore never bloat the snapshot. The base skips below always
-    // apply regardless of ignore files.
-    let mut builder = ignore::WalkBuilder::new(root);
-    builder
-        .hidden(false)
-        .require_git(false)
-        .git_ignore(true)
-        .git_global(true)
-        .git_exclude(true)
-        .follow_links(false)
-        .threads(1);
-    builder.filter_entry(|entry| {
-        if entry.file_type().is_some_and(|ft| ft.is_dir()) {
-            let name = entry.file_name();
-            !SKIPPED_DIRS.iter().any(|skip| name == *skip)
-        } else {
-            true
-        }
-    });
+    // Pure std recursive walker respecting SKIPPED_DIRS and .gitignore patterns
+    struct GitIgnore {
+        patterns: Vec<String>,
+    }
 
-    for entry in builder.build() {
-        if started.elapsed() > scan_budget {
+    impl GitIgnore {
+        fn load(dir: &Path) -> Self {
+            let mut patterns = Vec::new();
+            let gi_path = dir.join(".gitignore");
+            if let Ok(content) = fs::read_to_string(&gi_path) {
+                for line in content.lines() {
+                    let trim = line.trim();
+                    if trim.is_empty() || trim.starts_with('#') {
+                        continue;
+                    }
+                    patterns.push(trim.to_string());
+                }
+            }
+            Self { patterns }
+        }
+
+        fn is_ignored(&self, rel_path: &str, is_dir: bool) -> bool {
+            let norm_path = rel_path.replace('\\', "/");
+            let file_name = norm_path.rsplit('/').next().unwrap_or(&norm_path);
+
+            for pat in &self.patterns {
+                let pat_norm = pat.trim_start_matches('/').trim_end_matches('/');
+                let pat_is_dir_only = pat.ends_with('/');
+
+                if pat_is_dir_only && !is_dir {
+                    continue;
+                }
+
+                if pat.starts_with('*') {
+                    let ext = &pat[1..];
+                    if norm_path.ends_with(ext) || file_name.ends_with(ext) {
+                        return true;
+                    }
+                } else if norm_path == pat_norm
+                    || norm_path.starts_with(&format!("{pat_norm}/"))
+                    || file_name == pat_norm
+                {
+                    return true;
+                }
+            }
+            false
+        }
+    }
+
+    let root_gi = GitIgnore::load(root);
+
+    fn walk_dir(
+        root: &Path,
+        current_dir: &Path,
+        root_gi: &GitIgnore,
+        started: &std::time::Instant,
+        scan_budget: &std::time::Duration,
+        max_bytes: usize,
+        total: &mut usize,
+        files: &mut BTreeMap<PathBuf, Vec<u8>>,
+    ) -> anyhow::Result<()> {
+        if started.elapsed() > *scan_budget {
             log::warn!(
                 "workspace snapshot scan exceeded {}s — skipping remaining files",
                 scan_budget.as_secs()
             );
-            break;
+            return Ok(());
         }
-        let entry = entry?;
-        let Some(file_type) = entry.file_type() else {
-            continue;
+
+        let entries = match fs::read_dir(current_dir) {
+            Ok(e) => e,
+            Err(_) => return Ok(()),
         };
-        if !file_type.is_file() {
-            continue;
+
+        let mut subdirs = Vec::new();
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let file_type = match entry.file_type() {
+                Ok(ft) => ft,
+                Err(_) => continue,
+            };
+
+            if file_type.is_symlink() {
+                continue;
+            }
+
+            let rel = match path.strip_prefix(root) {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+            let rel_str = rel.to_string_lossy().replace('\\', "/");
+
+            if file_type.is_dir() {
+                let dir_name = entry.file_name();
+                let dir_name_str = dir_name.to_string_lossy();
+                if SKIPPED_DIRS.iter().any(|skip| dir_name_str == *skip) {
+                    continue;
+                }
+                if root_gi.is_ignored(&rel_str, true) {
+                    continue;
+                }
+                subdirs.push(path);
+            } else if file_type.is_file() {
+                // If the file itself is .gitignore, always include it
+                let is_gitignore = rel_str == ".gitignore" || rel_str.ends_with("/.gitignore");
+                if !is_gitignore && root_gi.is_ignored(&rel_str, false) {
+                    continue;
+                }
+
+                let bytes = fs::read(&path)?;
+                *total = total.saturating_add(bytes.len());
+                if *total > max_bytes {
+                    anyhow::bail!("workspace transaction snapshot exceeds {} bytes", max_bytes);
+                }
+                files.insert(rel.to_path_buf(), bytes);
+            }
         }
-        let path = entry.path();
-        if path.is_symlink() {
-            continue;
+
+        for subdir in subdirs {
+            walk_dir(root, &subdir, root_gi, started, scan_budget, max_bytes, total, files)?;
         }
-        let bytes = fs::read(path)?;
-        total = total.saturating_add(bytes.len());
-        if total > max_bytes {
-            anyhow::bail!("workspace transaction snapshot exceeds {} bytes", max_bytes);
-        }
-        let relative = path
-            .strip_prefix(root)
-            .map_err(|_| anyhow::anyhow!("transaction path escaped workspace"))?
-            .to_path_buf();
-        files.insert(relative, bytes);
+
+        Ok(())
     }
+
+    walk_dir(root, root, &root_gi, &started, &scan_budget, max_bytes, &mut total, &mut files)?;
     Ok(files)
 }
 

@@ -43,7 +43,42 @@ impl ProviderStore {
         }
         let text = std::fs::read_to_string(&path)
             .with_context(|| format!("reading {}", path.display()))?;
-        toml::from_str(&text).context("parsing providers.toml")
+
+        let mut store = Self::default();
+        let mut current_section: Option<String> = None;
+
+        for line in text.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+
+            if line.starts_with('[') && line.ends_with(']') {
+                let sec = line[1..line.len() - 1].trim().to_string();
+                current_section = Some(sec);
+                continue;
+            }
+
+            if let Some((k, v)) = line.split_once('=') {
+                let key = k.trim();
+                let val = v.trim();
+                let val_clean = val.trim_matches('"').trim_matches('\'').to_string();
+
+                if let Some(ref sec) = current_section {
+                    let entry = store.providers.entry(sec.clone()).or_default();
+                    match key {
+                        "api_key" => entry.api_key = Some(val_clean),
+                        "api_base" => entry.api_base = Some(val_clean),
+                        "enabled" => {
+                            entry.enabled = val.parse::<bool>().unwrap_or(true);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+
+        Ok(store)
     }
 
     /// Persist to disk with 0600 permissions (owner read/write only on Unix).
@@ -53,7 +88,23 @@ impl ProviderStore {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("creating {}", parent.display()))?;
         }
-        let text = toml::to_string_pretty(self).context("serialising providers")?;
+
+        let mut text = String::new();
+        let mut sorted_keys: Vec<_> = self.providers.keys().collect();
+        sorted_keys.sort();
+
+        for key in sorted_keys {
+            let entry = &self.providers[key];
+            text.push_str(&format!("[{key}]\n"));
+            if let Some(ref k) = entry.api_key {
+                text.push_str(&format!("api_key = \"{k}\"\n"));
+            }
+            if let Some(ref b) = entry.api_base {
+                text.push_str(&format!("api_base = \"{b}\"\n"));
+            }
+            text.push_str(&format!("enabled = {}\n\n", entry.enabled));
+        }
+
         std::fs::write(&path, &text).with_context(|| format!("writing {}", path.display()))?;
         #[cfg(unix)]
         {

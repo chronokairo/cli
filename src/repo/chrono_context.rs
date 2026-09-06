@@ -262,9 +262,11 @@ impl ChronoContextEngine {
                     }
                 }
 
-                // Inject full guidelines if present
+                // Inject full guidelines if present, otherwise inject body content
                 if let Some(guidelines) = &doc.system_guidelines {
                     output.push(guidelines.clone());
+                } else if !doc.body_summary.is_empty() {
+                    output.push(doc.body_summary.clone());
                 }
             }
         }
