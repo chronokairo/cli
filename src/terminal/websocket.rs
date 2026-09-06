@@ -5,7 +5,6 @@ use axum::{
     },
     response::IntoResponse,
 };
-use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use tokio::task;
 
@@ -42,7 +41,6 @@ async fn handle_terminal_socket(socket: WebSocket, manager: TerminalSessionManag
         None => return,
     };
 
-    let (mut ws_sender, mut ws_receiver) = socket.split();
     let (tx_bytes, mut rx_bytes) = tokio::sync::mpsc::channel::<Vec<u8>>(256);
 
     // Blocking reader task for PTY stdout -> channel
@@ -57,51 +55,41 @@ async fn handle_terminal_socket(socket: WebSocket, manager: TerminalSessionManag
         }
     });
 
-    // Task forwarding channel -> WebSocket output
-    let send_task = tokio::spawn(async move {
-        while let Some(bytes) = rx_bytes.recv().await {
-            if let Ok(text) = String::from_utf8(bytes.clone()) {
-                if ws_sender.send(Message::Text(text.into())).await.is_err() {
+    let mut socket = socket;
+    loop {
+        tokio::select! {
+            Some(bytes) = rx_bytes.recv() => {
+                if let Ok(text) = String::from_utf8(bytes.clone()) {
+                    if socket.send(Message::Text(text.into())).await.is_err() {
+                        break;
+                    }
+                } else if socket.send(Message::Binary(bytes.into())).await.is_err() {
                     break;
                 }
-            } else if ws_sender.send(Message::Binary(bytes.into())).await.is_err() {
-                break;
             }
-        }
-    });
-
-    // Task receiving WebSocket input -> PTY stdin / resize
-    let session_clone = pty_session.clone();
-    let recv_task = tokio::spawn(async move {
-        while let Some(Ok(msg)) = ws_receiver.next().await {
-            match msg {
-                Message::Text(text) => {
+            msg = socket.recv() => match msg {
+                Some(Ok(Message::Text(text))) => {
                     if let Ok(ctrl) = serde_json::from_str::<ClientControlMessage>(&text) {
                         match ctrl {
                             ClientControlMessage::Input { data } => {
-                                let _ = session_clone.write_input(data.as_bytes());
+                                let _ = pty_session.write_input(data.as_bytes());
                             }
                             ClientControlMessage::Resize { cols, rows } => {
-                                let _ = session_clone.resize(cols, rows);
+                                let _ = pty_session.resize(cols, rows);
                             }
                         }
                     } else {
-                        let _ = session_clone.write_input(text.as_bytes());
+                        let _ = pty_session.write_input(text.as_bytes());
                     }
                 }
-                Message::Binary(bytes) => {
-                    let _ = session_clone.write_input(&bytes);
+                Some(Ok(Message::Binary(bytes))) => {
+                    let _ = pty_session.write_input(&bytes);
                 }
-                Message::Close(_) => break,
+                Some(Ok(Message::Close(_))) | None | Some(Err(_)) => break,
                 _ => {}
             }
         }
-    });
-
-    tokio::select! {
-        _ = send_task => {},
-        _ = recv_task => {},
-    };
+    }
 
     reader_task.abort();
     manager.remove_session(&session_id);
