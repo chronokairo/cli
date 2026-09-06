@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use crate::error::{Context, Result};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
@@ -34,7 +34,7 @@ impl TerminalSessionManager {
         let mut map = self
             .sessions
             .write()
-            .map_err(|_| anyhow::anyhow!("Session lock poisoned"))?;
+            .map_err(|_| crate::error::anyhow!("Session lock poisoned"))?;
 
         map.insert(id.to_string(), Arc::clone(&arc_session));
         Ok((*arc_session).clone_read_handle())

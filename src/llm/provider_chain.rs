@@ -1,13 +1,9 @@
 //! Módulo de rate-limiting + fallback pro adapter HTTP OpenAI-compatible.
 //! Encaixa entre o plan/act/verify loop e o provider real (NIM ou local).
 //!
-//! Deps sugeridas no Cargo.toml:
-//! tokio = { version = "1", features = ["full"] }
-//! reqwest = { version = "0.12", features = ["json"] }
-//! serde = { version = "1", features = ["derive"] }
-//! rand = "0.8"
 
-use rand::Rng;
+
+type CompletionFuture<'a> = std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, ProviderError>> + Send + 'a>>;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
@@ -140,10 +136,9 @@ impl CircuitBreaker {
 
 // ---------- Trait comum pra qualquer backend (NIM, local, etc) ----------
 
-#[async_trait::async_trait]
 pub trait CompletionProvider: Send + Sync {
     fn name(&self) -> &str;
-    async fn complete(&self, prompt: &str) -> Result<String, ProviderError>;
+    fn complete<'a>(&'a self, prompt: &'a str) -> CompletionFuture<'a>;
 }
 
 // ---------- Provider NIM com rate limiter embutido ----------
@@ -168,13 +163,12 @@ impl NimProvider {
     }
 }
 
-#[async_trait::async_trait]
 impl CompletionProvider for NimProvider {
     fn name(&self) -> &str {
         "nim"
     }
 
-    async fn complete(&self, prompt: &str) -> Result<String, ProviderError> {
+    fn complete<'a>(&'a self, prompt: &'a str) -> CompletionFuture<'a> { Box::pin(async move {
         self.bucket.acquire().await;
 
         let resp = self
@@ -205,7 +199,7 @@ impl CompletionProvider for NimProvider {
             .as_str()
             .map(String::from)
             .ok_or_else(|| ProviderError::Fatal("resposta sem campo content".into()))
-    }
+    }) }
 }
 
 // ---------- Provider local (Ollama no T1000/1650) ----------
@@ -226,13 +220,12 @@ impl LocalProvider {
     }
 }
 
-#[async_trait::async_trait]
 impl CompletionProvider for LocalProvider {
     fn name(&self) -> &str {
         "local"
     }
 
-    async fn complete(&self, prompt: &str) -> Result<String, ProviderError> {
+    fn complete<'a>(&'a self, prompt: &'a str) -> CompletionFuture<'a> { Box::pin(async move {
         let resp = self
             .client
             .post(format!("{}/api/generate", self.endpoint))
@@ -260,7 +253,7 @@ impl CompletionProvider for LocalProvider {
             .as_str()
             .map(String::from)
             .ok_or_else(|| ProviderError::Fatal("resposta sem campo response".into()))
-    }
+    }) }
 }
 
 pub struct CircuitBreakerProvider {
@@ -289,13 +282,12 @@ impl CircuitBreakerProvider {
     }
 }
 
-#[async_trait::async_trait]
 impl CompletionProvider for CircuitBreakerProvider {
     fn name(&self) -> &str {
         self.inner.name()
     }
 
-    async fn complete(&self, prompt: &str) -> Result<String, ProviderError> {
+    fn complete<'a>(&'a self, prompt: &'a str) -> CompletionFuture<'a> { Box::pin(async move {
         if !self.breaker.allow().await {
             return Err(ProviderError::Transient(format!(
                 "circuit breaker open for {}",
@@ -312,7 +304,7 @@ impl CompletionProvider for CircuitBreakerProvider {
                 Err(err)
             }
         }
-    }
+    }) }
 }
 
 // ---------- Fallback chain com retry + backoff exponencial + jitter ----------
@@ -380,7 +372,7 @@ impl FallbackChain {
 
 async fn backoff_sleep(attempt: u32) {
     let base_ms = 500u64 * 2u64.pow(attempt.min(5));
-    let jitter_ms: u64 = rand::thread_rng().gen_range(0..250);
+    let jitter_ms: u64 = crate::random::system_u64().map(|n| n % 250).unwrap_or(0);
     tokio::time::sleep(Duration::from_millis(base_ms + jitter_ms)).await;
 }
 
@@ -399,7 +391,8 @@ pub fn build_default_chain(
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Arc;
+    type CompletionFuture<'a> = std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, ProviderError>> + Send + 'a>>;
+use std::sync::Arc;
 
     fn run<F: std::future::Future<Output = T>, T>(fut: F) -> T {
         tokio::runtime::Runtime::new().unwrap().block_on(fut)
@@ -431,12 +424,11 @@ mod tests {
         }
     }
 
-    #[async_trait::async_trait]
     impl CompletionProvider for MockProvider {
         fn name(&self) -> &str {
             self.name
         }
-        async fn complete(&self, _prompt: &str) -> Result<String, ProviderError> {
+        fn complete<'a>(&'a self, _prompt: &'a str) -> CompletionFuture<'a> { Box::pin(async move {
             self.calls.fetch_add(1, Ordering::SeqCst);
             match self.result {
                 MockResult::Ok(s) => Ok(s.to_string()),
@@ -444,7 +436,7 @@ mod tests {
                 MockResult::CreditExhausted => Err(ProviderError::CreditExhausted),
                 MockResult::Fatal => Err(ProviderError::Fatal("boom".into())),
             }
-        }
+        }) }
     }
 
     #[test]

@@ -1,8 +1,8 @@
 use crate::llm::infer::model::Tensor;
 use crate::llm::infer::tokenizer::Tokenizer;
 use crate::llm::infer::{gguf, ops};
-use anyhow::Result;
-use rand::Rng;
+use crate::error::Result;
+
 
 pub struct InferenceEngine {
     model: super::model::Model,
@@ -327,7 +327,7 @@ impl InferenceEngine {
         let n_layers = self.model.n_layer as usize;
         let s = self.n_past + 1;
 
-        anyhow::ensure!(s <= self.max_seq_len, "Max sequence length exceeded");
+        crate::error::ensure!(s <= self.max_seq_len, "Max sequence length exceeded");
 
         let emb = {
             let emb = self
@@ -336,14 +336,15 @@ impl InferenceEngine {
                 .get("token_embd.weight")
                 .or_else(|| self.model.tensors.get("tok_embeddings.weight"))
                 .or_else(|| self.model.tensors.get("gpt.embd.weight"))
-                .ok_or_else(|| anyhow::anyhow!("No token embedding tensor found"))?;
+                .ok_or_else(|| crate::error::anyhow!("No token embedding tensor found"))?;
 
             let emb_row_size = emb.dims[0] as usize;
             match emb.ty {
                 gguf::GgmlType::F32 => {
-                    let src = bytemuck::cast_slice::<u8, f32>(&emb.data);
-                    src[token_id as usize * emb_row_size..(token_id as usize + 1) * emb_row_size]
-                        .to_vec()
+                    let start = token_id as usize * emb_row_size * 4;
+                    let mut row = vec![0.0; emb_row_size];
+                    super::model::decode_f32(&emb.data[start..start + emb_row_size * 4], &mut row);
+                    row
                 }
                 _ => {
                     emb.dequantize_to_f32(&mut self.weights);
@@ -449,7 +450,7 @@ impl InferenceEngine {
         let tokens = self
             .tokenizer
             .encode(text, self.max_seq_len.saturating_sub(1));
-        anyhow::ensure!(!tokens.is_empty(), "failed to tokenize text for embedding");
+        crate::error::ensure!(!tokens.is_empty(), "failed to tokenize text for embedding");
         self.n_past = 0;
         let n_vocab = self.model.n_vocab as usize;
         let mut logits = vec![0.0f32; n_vocab];
@@ -493,7 +494,7 @@ impl InferenceEngine {
     ) -> Result<(String, usize)> {
         let input_tokens = self.tokenizer.encode(prompt, 512);
         if input_tokens.is_empty() {
-            anyhow::bail!("Failed to tokenize prompt");
+            crate::error::bail!("Failed to tokenize prompt");
         }
 
         let n_vocab = self.model.n_vocab as usize;
@@ -505,7 +506,7 @@ impl InferenceEngine {
             self.forward(tok, &mut logits)?;
         }
 
-        let mut rng = rand::thread_rng();
+        let mut rng = crate::random::Sampler::new()?;
 
         for _ in 0..max_tokens {
             let mut last_token;
@@ -545,7 +546,7 @@ impl InferenceEngine {
                     *l *= inv;
                 }
 
-                let r: f32 = rng.gen();
+                let r: f32 = rng.unit_f32();
                 let mut cum = 0.0;
                 last_token = (n_vocab - 1) as u32;
                 for (j, &v) in logits.iter().enumerate() {

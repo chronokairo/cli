@@ -71,7 +71,7 @@ pub struct AgentState {
 }
 
 impl AgentState {
-    pub fn new(mut config: Config) -> anyhow::Result<Self> {
+    pub fn new(mut config: Config) -> crate::error::Result<Self> {
         config.workspace_dir = crate::tools::fs::normalize_workspace_path(&config.workspace_dir);
         let long_memory = LongTermMemory::new(config.memory_dir.join("memory.db"))?;
         let embedder = crate::llm::embedder::Embedder::new();
@@ -111,7 +111,7 @@ impl AgentState {
         })
     }
 
-    pub fn start_turn(&mut self) -> anyhow::Result<()> {
+    pub fn start_turn(&mut self) -> crate::error::Result<()> {
         self.retries = 0;
         self.repair_attempt = 0;
         self.last_test_output.clear();
@@ -188,7 +188,7 @@ impl AgentState {
         None
     }
 
-    pub fn refresh_workspace_diff(&mut self) -> anyhow::Result<WorkspaceDiff> {
+    pub fn refresh_workspace_diff(&mut self) -> crate::error::Result<WorkspaceDiff> {
         let diff = self
             .transaction
             .as_ref()
@@ -201,13 +201,13 @@ impl AgentState {
         Ok(diff)
     }
 
-    pub fn keep_changes(&mut self) -> anyhow::Result<WorkspaceDiff> {
+    pub fn keep_changes(&mut self) -> crate::error::Result<WorkspaceDiff> {
         let diff = self.refresh_workspace_diff()?;
         self.transaction = None;
         Ok(diff)
     }
 
-    pub fn rollback_changes(&mut self) -> anyhow::Result<WorkspaceDiff> {
+    pub fn rollback_changes(&mut self) -> crate::error::Result<WorkspaceDiff> {
         let diff = match self.transaction.take() {
             Some(transaction) => transaction.rollback()?,
             None => WorkspaceDiff::default(),
@@ -266,7 +266,7 @@ impl AgentState {
     }
 
     /// Ensure a persistent session record exists for this conversation.
-    fn ensure_session(&mut self) -> anyhow::Result<i64> {
+    fn ensure_session(&mut self) -> crate::error::Result<i64> {
         if let Some(id) = self.session_id {
             return Ok(id);
         }
@@ -280,7 +280,7 @@ impl AgentState {
 
     /// Write the transcript records added since the last persist to the session
     /// store (append-only). Sub-agent states do not persist.
-    pub fn persist_session(&mut self) -> anyhow::Result<()> {
+    pub fn persist_session(&mut self) -> crate::error::Result<()> {
         if !self.session_persist {
             return Ok(());
         }
@@ -364,7 +364,7 @@ impl AgentState {
 
     /// Load a saved conversation into the working session, restoring the full
     /// transcript so the next turn continues with the prior context intact.
-    pub fn load_session_into_state(&mut self, id: i64) -> anyhow::Result<usize> {
+    pub fn load_session_into_state(&mut self, id: i64) -> crate::error::Result<usize> {
         let rows = self.long_memory.load_session(id)?;
         let context = self.long_memory.session_context(id)?;
         let mut max_seq = 0u64;
@@ -408,7 +408,7 @@ impl AgentState {
         Ok(self.session.history().len())
     }
 
-    pub fn subagent_clone(&self) -> anyhow::Result<Self> {
+    pub fn subagent_clone(&self) -> crate::error::Result<Self> {
         let mut child = Self::new(self.config.clone())?;
         child.session_persist = false;
         Ok(child)

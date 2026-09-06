@@ -25,7 +25,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
+
 
 use crate::agent::agent_loop::{
     AgentEvent, AgentHooks, ApprovalDecision, ApprovalRequest, PlanApprovalDecision,
@@ -969,7 +969,7 @@ fn format_auto_test_scene(record: &crate::llm::router::AutoTestRecord) -> String
 }
 
 // Save an API key for a provider to ProviderStore and GlobalSettings and set in env.
-fn save_provider_key(provider: &str, key: &str) -> anyhow::Result<()> {
+fn save_provider_key(provider: &str, key: &str) -> crate::error::Result<()> {
     let mut store = crate::providers::ProviderStore::load();
     store.set_key(provider, key);
     store.save()?;
@@ -4095,7 +4095,7 @@ fn sanitize_status(s: &str) -> String {
 /// Copy text to system clipboard using OSC 52 escape sequence.
 /// Works in most modern terminals (Alacritty, Kitty, WezTerm, iTerm2, Windows Terminal, etc.)
 fn copy_to_clipboard(text: &str) {
-    let encoded = BASE64_STANDARD.encode(text);
+    let encoded = crate::base64::encode(text);
     let osc52 = format!("\x1b]52;c;{}\x07", encoded);
     let _ = io::stdout().write_all(osc52.as_bytes());
     let _ = io::stdout().flush();
@@ -4942,6 +4942,7 @@ mod tests {
 
     #[test]
     fn save_provider_key_persists_to_store_and_env() {
+        let _profile = crate::config::global_settings::TestHome::new();
         let res = save_provider_key("testprov", "sk-test-12345678");
         assert!(res.is_ok());
         let store = crate::providers::ProviderStore::load();

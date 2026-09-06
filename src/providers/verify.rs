@@ -1,5 +1,5 @@
 use crate::providers::ProviderEntry;
-use anyhow::{bail, Result};
+use crate::error::{bail, Result};
 
 /// Verify a provider by sending a minimal request to its API.
 /// Currently supports OpenAI-compatible `/models` endpoints.

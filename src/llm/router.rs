@@ -1,7 +1,7 @@
 use crate::llm::client::{ChatCompletion, LlmClient, ResponseFormat, ToolChoice, ToolDef};
 use crate::llm::tier;
 use crate::providers::{base_id, ModelsDevClient};
-use anyhow::{Context, Result};
+use crate::error::{Context, Result};
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
 
@@ -260,8 +260,8 @@ impl LlmRouter {
 
         tokio::time::timeout(timeout_duration, client.generate(&api_id, "Hi", None, None))
             .await
-            .map_err(|_| anyhow::anyhow!("Timeout probing model '{model}'"))?
-            .map_err(|e| anyhow::anyhow!("Probe failed for model '{model}': {e}"))?;
+            .map_err(|_| crate::error::anyhow!("Timeout probing model '{model}'"))?
+            .map_err(|e| crate::error::anyhow!("Probe failed for model '{model}': {e}"))?;
 
         Ok(start.elapsed())
     }

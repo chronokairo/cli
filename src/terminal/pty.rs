@@ -49,7 +49,7 @@ impl TerminalSession {
         cols: u16,
         rows: u16,
         cwd: Option<&Path>,
-    ) -> anyhow::Result<Self> {
+    ) -> crate::error::Result<Self> {
         let pty_system = native_pty_system();
         let pair = pty_system.openpty(PtySize {
             rows,
@@ -90,7 +90,7 @@ impl TerminalSession {
     }
 
     /// Resize the terminal after a browser window resize.
-    pub fn resize(&self, cols: u16, rows: u16) -> anyhow::Result<()> {
+    pub fn resize(&self, cols: u16, rows: u16) -> crate::error::Result<()> {
         let pair = self.pair.lock().unwrap();
         let _ = pair.master.resize(PtySize {
             rows,
@@ -102,7 +102,7 @@ impl TerminalSession {
     }
 
     /// Write bytes to the child's stdin (terminal input from the browser).
-    pub fn write_input(&self, data: &[u8]) -> anyhow::Result<()> {
+    pub fn write_input(&self, data: &[u8]) -> crate::error::Result<()> {
         let mut writer = self.writer.lock().unwrap();
         writer.write_all(data)?;
         writer.flush()?;

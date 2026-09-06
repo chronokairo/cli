@@ -7,7 +7,7 @@ use crate::llm::router::LlmRouter;
 use crate::protocol::event_log::CanonicalEventLog;
 use crate::protocol::EventMsg;
 use crate::tools::sandbox::SandboxPolicy;
-use anyhow::Result;
+use crate::error::Result;
 use serde::{Deserialize, Serialize};
 
 /// Typed result of the pure tool loop

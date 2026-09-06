@@ -1,0 +1,353 @@
+use std::path::PathBuf;
+use crate::llm::router::DEFAULT_PROVIDER;
+
+#[derive(Debug)]
+pub(crate) struct Cli {
+    pub(crate) command: Option<Commands>,
+    /// Use local GGUF inference instead of Ollama
+    pub(crate) local: bool,
+    /// Offload matrix multiplications to OpenCL GPU (requires --local and --features gpu)
+    pub(crate) gpu: bool,
+    /// Model name (e.g. gemma3:1b) or path to a .gguf file
+    pub(crate) model: Option<String>,
+    pub(crate) dir: String,
+    /// Use a cloud provider (OpenAI-compatible, e.g. NVIDIA NIM) for inference
+    pub(crate) cloud: bool,
+    /// Cloud provider id (default: nvidia — NVIDIA NIM)
+    pub(crate) provider: String,
+    /// Cloud model id for inference (overrides planner/coder/summarizer defaults)
+    pub(crate) cloud_model: Option<String>,
+    /// Resume a previous session (lists saved sessions to pick from)
+    pub(crate) resume: bool,
+    /// Continue the most recent session for this workspace without prompting
+    pub(crate) cont: bool,
+    /// Download the default embedding model (Qwen3-Embedding 0.6B Q8) into ~/.anamnesic/models for memory_search
+    pub(crate) download_embedding_model: bool,
+    pub(crate) task: Option<String>,
+}
+
+#[derive(Debug)]
+pub(crate) enum Commands {
+    Check,
+    /// Launch the terminal UI
+    Tui,
+    /// Expose the TUI in the browser via xterm.js over WebSocket
+    Serve {
+        /// Listen address (default 127.0.0.1)
+        host: String,
+        /// Listen port
+        port: u16,
+    },
+    Repl,
+    /// List locally available models
+    Models,
+    /// List cloud models from models.dev catalog
+    Cloud {
+        /// Filter by name/family/provider (empty = show all)
+        query: String,
+    },
+    /// Configure and manage cloud provider API keys (stored securely at ~/.anamnesic/providers.toml)
+    Providers {
+        action: ProvidersAction,
+    },
+    /// Benchmark all local models and show ranking vs hw_recommend predictions
+    Bench {
+        /// Category to evaluate against (general, coding, reasoning, chat)
+        category: String,
+        /// Output JSON file for results
+        output: String,
+        /// Also benchmark cloud models (requires API keys)
+        cloud: bool,
+    },
+    /// Run a coding task headlessly (non-interactive)
+    Exec {
+        /// Task to execute
+        task: String,
+        /// Run in plan mode (generate plan first)
+        plan: bool,
+        /// Output events as JSON Lines
+        jsonl: bool,
+        /// Auto-approve all approvals (for CI)
+        yes: bool,
+    },
+    /// Run JSON-RPC 2.0 app server over stdio (for IDE integration)
+    AppServer,
+    /// Run MCP server exposing the harness as tools
+    McpServer,
+    /// Translate a PDF document in real-time using local Ollama models
+    Translate {
+        /// Path to the PDF file
+        file: PathBuf,
+        /// Ollama model to use for translation (default: qwen2.5:7b)
+        model: String,
+        /// Target language (default: "Português (Brasil)")
+        to: String,
+        /// GPU device to use ('0' for NVIDIA GTX 1650, '1' for Intel UHD, 'cpu' for CPU only, 'auto')
+        gpu: Option<String>,
+        /// Output file path (e.g. translated.md)
+        out: Option<PathBuf>,
+    },
+    /// Compile and display curated project context using the Zero-Lib ChronoContext engine
+    Context {
+        /// Optional task query to filter relevant domain documents
+        task: Option<String>,
+        /// Character budget limit for the context pack
+        budget: usize,
+    },
+}
+
+/// Sub-actions for `rust-agent providers`
+#[derive(Debug)]
+pub(crate) enum ProvidersAction {
+    /// List all providers from the models.dev catalog and their configuration status
+    List,
+    /// Show currently configured providers and their (masked) API keys
+    Show,
+    /// Set an API key for a provider  (e.g. rust-agent providers set openai sk-...)
+    Set {
+        /// Provider ID as in models.dev (e.g. openai, anthropic, groq, mistral)
+        provider: String,
+        /// API key — read from stdin if omitted (safer: avoids shell history)
+        api_key: Option<String>,
+        /// Override the API base URL (optional; uses provider default if not set)
+        base: Option<String>,
+    },
+    /// Remove a provider's API key and config
+    Remove { provider: String },
+    /// Enable or disable a provider without removing its key
+    Enable {
+        provider: String,
+        enabled: bool,
+    },
+    /// Test connectivity and API key validity for a provider
+    Test { provider: String },
+    /// Import API keys from environment variables (reads models.dev env var names)
+    Import,
+}
+
+
+use std::collections::{HashMap, VecDeque};
+use std::ffi::OsString;
+
+#[derive(Debug)]
+struct ParseError { text: String, code: i32 }
+impl ParseError {
+    fn invalid(text: impl Into<String>) -> Self { Self { text: text.into(), code: 2 } }
+}
+type Parsed<T> = std::result::Result<T, ParseError>;
+// canonical long name, optional short name, whether a value is required
+const ROOT: &[(&str, &str, bool)] = &[
+    ("local", "", false), ("gpu", "", false), ("model", "", true),
+    ("dir", "d", true), ("cloud", "", false), ("provider", "", true),
+    ("cloud-model", "", true), ("resume", "", false), ("cont", "", false),
+    ("download-embedding-model", "", false),
+];
+const COMMANDS: &[&str] = &["check", "tui", "serve", "repl", "models", "cloud", "providers", "bench", "exec", "app-server", "mcp-server", "translate", "context"];
+
+#[derive(Default)]
+struct Options {
+    values: HashMap<String, Option<OsString>>,
+    positional: VecDeque<OsString>,
+    command: Option<String>,
+}
+impl Options {
+    fn flag(&mut self, name: &str) -> bool { self.values.remove(name).is_some() }
+    fn value(&mut self, name: &str) -> Parsed<Option<String>> {
+        self.values.remove(name).flatten().map(|v| utf8(v, name)).transpose()
+    }
+    fn value_or(&mut self, name: &str, fallback: &str) -> Parsed<String> {
+        Ok(self.value(name)?.unwrap_or_else(|| fallback.to_owned()))
+    }
+    fn number<T: std::str::FromStr>(&mut self, name: &str, fallback: &str) -> Parsed<T> {
+        self.value_or(name, fallback)?.parse().map_err(|_| ParseError::invalid(format!("invalid value for --{name}")))
+    }
+    fn required(&mut self, name: &str) -> Parsed<OsString> {
+        self.positional.pop_front().ok_or_else(|| ParseError::invalid(format!("missing required argument: {name}")))
+    }
+    fn text(&mut self, name: &str) -> Parsed<String> { utf8(self.required(name)?, name) }
+    fn optional_text(&mut self, name: &str) -> Parsed<Option<String>> {
+        self.positional.pop_front().map(|v| utf8(v, name)).transpose()
+    }
+    fn done(self) -> Parsed<()> {
+        // Never echo positional values: these can contain provider secrets.
+        if !self.positional.is_empty() { return Err(ParseError::invalid("too many positional arguments")); }
+        Ok(())
+    }
+}
+fn utf8(value: OsString, label: &str) -> Parsed<String> {
+    value.into_string().map_err(|_| ParseError::invalid(format!("{label} must be UTF-8")))
+}
+fn help(command: &str) -> String {
+    let usage = match command {
+        "" => "[OPTIONS] [TASK] [COMMAND]\n\nCommands:\n  check  tui  serve  repl  models  cloud  providers  bench\n  exec   app-server  mcp-server  translate  context\n\nOptions:\n  --local  --gpu  --model <MODEL>  -d, --dir <DIR> [default: .]\n  --cloud  --provider <ID>  --cloud-model <MODEL>\n  --resume  --cont (alias: --continue)  --download-embedding-model",
+        "serve" => "[--host <HOST>] [--port <PORT>]\nDefaults: 127.0.0.1:7681",
+        "cloud" => "[QUERY]",
+        "providers" => "<COMMAND>\nCommands: list, show, set, remove, enable, test, import",
+        "providers set" => "<PROVIDER> [API_KEY] [--base <URL>]\nReads a hidden key from stdin when API_KEY is omitted.",
+        "providers enable" => "<PROVIDER> <true|false>",
+        "providers remove" | "providers test" => "<PROVIDER>",
+        "bench" => "[-c, --category <CATEGORY>] [-o, --output <FILE>] [--cloud]\nDefaults: coding, bench_results.json",
+        "exec" => "<TASK> [--plan] [--jsonl] [--yes]",
+        "translate" => "<FILE> [-m, --model <MODEL>] [-t, --to <LANGUAGE>] [-g, --gpu <DEVICE>] [-o, --out <FILE>]\nDefaults: qwen2.5:7b, Português (Brasil)",
+        "context" => "[-t, --task <TASK>] [-b, --budget <CHARS>]\nDefault budget: 8000",
+        _ => "",
+    };
+    format!("ChronoKairo CLI (CKI)\n\nUsage: cki {}{}\n\n  -h, --help  Print help\n", if command.is_empty() { String::new() } else { format!("{command} ") }, usage)
+}
+fn scan(args: &mut VecDeque<OsString>, specs: &[(&str, &str, bool)], command: &str, root: bool) -> Parsed<Options> {
+    let mut parsed = Options::default();
+    let mut positional_only = false;
+    while let Some(arg) = args.pop_front() {
+        let text = arg.to_str().unwrap_or("");
+        if !positional_only && text == "--" { positional_only = true; continue; }
+        if !positional_only && (text == "--help" || text == "-h") {
+            return Err(ParseError { text: help(command), code: 0 });
+        }
+        if !positional_only && root && parsed.positional.is_empty() && COMMANDS.contains(&text) {
+            parsed.command = Some(text.to_owned());
+            break;
+        }
+        if !positional_only && text.starts_with('-') && text != "-" {
+            let (name, attached, short) = if let Some(long) = text.strip_prefix("--") {
+                let (name, value) = long.split_once('=').map_or((long, None), |(n, v)| (n, Some(v)));
+                (if name == "continue" { "cont" } else { name }, value, false)
+            } else {
+                let tail = &text[1..];
+                let end = tail.chars().next().unwrap().len_utf8();
+                (&tail[..end], (tail.len() > end).then_some(tail[end..].trim_start_matches('=')), true)
+            };
+            let Some(&(canonical, _, takes_value)) = specs.iter().find(|&&(long, alias, _)| if short { alias == name && !alias.is_empty() } else { long == name }) else {
+                return Err(ParseError::invalid(format!("unknown option: {}{name}", if short { "-" } else { "--" })));
+            };
+            if parsed.values.contains_key(canonical) { return Err(ParseError::invalid(format!("--{canonical} cannot be repeated"))); }
+            let value = if takes_value {
+                Some(match attached {
+                    Some(value) => OsString::from(value),
+                    None => {
+                        let next = args.pop_front().ok_or_else(|| ParseError::invalid(format!("--{canonical} requires a value")))?;
+                        if next.to_str().is_some_and(|v| v.starts_with('-') && v != "-") { return Err(ParseError::invalid(format!("--{canonical} requires a value"))); }
+                        next
+                    }
+                })
+            } else {
+                if attached.is_some() { return Err(ParseError::invalid(format!("--{canonical} does not accept a value"))); }
+                None
+            };
+            parsed.values.insert(canonical.to_owned(), value);
+        } else { parsed.positional.push_back(arg); }
+    }
+    Ok(parsed)
+}
+
+impl Cli {
+    pub fn parse() -> Self {
+        match Self::try_parse(std::env::args_os().skip(1)) {
+            Ok(cli) => cli,
+            Err(error) => {
+                if error.code == 0 { print!("{}", error.text); }
+                else { eprintln!("error: {}\nUse --help for usage.", error.text); }
+                std::process::exit(error.code);
+            }
+        }
+    }
+    fn try_parse(args: impl IntoIterator<Item = OsString>) -> Parsed<Self> {
+        let mut args: VecDeque<_> = args.into_iter().collect();
+        if args.front().is_some_and(|v| v == "help") {
+            args.pop_front();
+            let command = args.iter().map(|s| s.to_string_lossy()).collect::<Vec<_>>().join(" ");
+            if !command.is_empty() && !COMMANDS.contains(&command.split(' ').next().unwrap_or("")) { return Err(ParseError::invalid("unknown help command")); }
+            return Err(ParseError { text: help(&command), code: 0 });
+        }
+        let mut root = scan(&mut args, ROOT, "", true)?;
+        let command = root.command.take().map(|command| parse_command(&command, &mut args)).transpose()?;
+        let cli = Self {
+            command, local: root.flag("local"), gpu: root.flag("gpu"), model: root.value("model")?,
+            dir: root.value_or("dir", ".")?, cloud: root.flag("cloud"), provider: root.value_or("provider", DEFAULT_PROVIDER)?,
+            cloud_model: root.value("cloud-model")?, resume: root.flag("resume"), cont: root.flag("cont"),
+            download_embedding_model: root.flag("download-embedding-model"), task: root.optional_text("TASK")?,
+        };
+        root.done()?;
+        Ok(cli)
+    }
+}
+fn parse_command(command: &str, args: &mut VecDeque<OsString>) -> Parsed<Commands> {
+    if command == "providers" { return Ok(Commands::Providers { action: parse_provider(args)? }); }
+    let specs: &[(&str, &str, bool)] = match command {
+        "serve" => &[("host", "", true), ("port", "", true)],
+        "bench" => &[("category", "c", true), ("output", "o", true), ("cloud", "", false)],
+        "exec" => &[("plan", "", false), ("jsonl", "", false), ("yes", "", false)],
+        "translate" => &[("model", "m", true), ("to", "t", true), ("gpu", "g", true), ("out", "o", true)],
+        "context" => &[("task", "t", true), ("budget", "b", true)],
+        _ => &[],
+    };
+    let mut o = scan(args, specs, command, false)?;
+    let parsed = match command {
+        "check" => Commands::Check, "tui" => Commands::Tui, "repl" => Commands::Repl,
+        "models" => Commands::Models, "app-server" => Commands::AppServer, "mcp-server" => Commands::McpServer,
+        "serve" => Commands::Serve { host: o.value_or("host", "127.0.0.1")?, port: o.number("port", "7681")? },
+        "cloud" => Commands::Cloud { query: o.optional_text("QUERY")?.unwrap_or_default() },
+        "bench" => Commands::Bench { category: o.value_or("category", "coding")?, output: o.value_or("output", "bench_results.json")?, cloud: o.flag("cloud") },
+        "exec" => Commands::Exec { task: o.text("TASK")?, plan: o.flag("plan"), jsonl: o.flag("jsonl"), yes: o.flag("yes") },
+        "translate" => Commands::Translate { file: o.required("FILE")?.into(), model: o.value_or("model", "qwen2.5:7b")?, to: o.value_or("to", "Português (Brasil)")?, gpu: o.value("gpu")?, out: o.values.remove("out").flatten().map(PathBuf::from) },
+        "context" => Commands::Context { task: o.value("task")?, budget: o.number("budget", "8000")? },
+        _ => return Err(ParseError::invalid("unknown command")),
+    };
+    o.done()?;
+    Ok(parsed)
+}
+fn parse_provider(args: &mut VecDeque<OsString>) -> Parsed<ProvidersAction> {
+    let action = args.pop_front().ok_or_else(|| ParseError::invalid("providers requires a command"))?;
+    let action = utf8(action, "COMMAND")?;
+    if action == "--help" || action == "-h" { return Err(ParseError { text: help("providers"), code: 0 }); }
+    let specs: &[(&str, &str, bool)] = if action == "set" { &[("base", "", true)] } else { &[] };
+    let mut o = scan(args, specs, &format!("providers {action}"), false)?;
+    let parsed = match action.as_str() {
+        "list" => ProvidersAction::List, "show" => ProvidersAction::Show, "import" => ProvidersAction::Import,
+        "set" => ProvidersAction::Set { provider: o.text("PROVIDER")?, api_key: o.optional_text("API_KEY")?, base: o.value("base")? },
+        "remove" => ProvidersAction::Remove { provider: o.text("PROVIDER")? },
+        "test" => ProvidersAction::Test { provider: o.text("PROVIDER")? },
+        "enable" => ProvidersAction::Enable { provider: o.text("PROVIDER")?, enabled: o.text("ENABLED")?.parse().map_err(|_| ParseError::invalid("ENABLED must be true or false"))? },
+        _ => return Err(ParseError::invalid("unknown providers command")),
+    };
+    o.done()?;
+    Ok(parsed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn parse(args: &[&str]) -> Parsed<Cli> { Cli::try_parse(args.iter().map(OsString::from)) }
+    #[test]
+    fn root_defaults_and_aliases() {
+        let c = parse(&[]).unwrap();
+        assert_eq!(c.dir, "."); assert_eq!(c.provider, DEFAULT_PROVIDER); assert!(c.command.is_none());
+        let c = parse(&["--continue", "-dproject", "--model=local", "do work"]).unwrap();
+        assert!(c.cont); assert_eq!(c.dir, "project"); assert_eq!(c.task.as_deref(), Some("do work"));
+    }
+    #[test]
+    fn every_command_parses() {
+        for args in [&["check"][..], &["tui"], &["serve"], &["repl"], &["models"], &["cloud"], &["bench"], &["exec", "task"], &["app-server"], &["mcp-server"], &["translate", "a.pdf"], &["context"], &["providers", "list"], &["providers", "show"], &["providers", "import"], &["providers", "remove", "id"], &["providers", "test", "id"], &["providers", "set", "id"], &["providers", "enable", "id", "false"]] {
+            assert!(parse(args).is_ok(), "{args:?}");
+        }
+    }
+    #[test]
+    fn command_options_and_literal_tasks() {
+        let c = parse(&["--cloud", "exec", "--plan", "--jsonl", "--yes", "--", "--literal-task"]).unwrap();
+        assert!(matches!(c.command, Some(Commands::Exec { task, plan: true, jsonl: true, yes: true }) if task == "--literal-task"));
+        assert!(matches!(parse(&["serve", "--port=1234"]).unwrap().command, Some(Commands::Serve { port: 1234, .. })));
+        assert!(matches!(parse(&["translate", "a.pdf", "-mfoo", "-t", "English", "-oout.md"]).unwrap().command, Some(Commands::Translate { model, to, out: Some(out), .. }) if model == "foo" && to == "English" && out == PathBuf::from("out.md")));
+    }
+    #[test]
+    fn rejects_malformed_invocations_without_exposing_values() {
+        for args in [&["--unknown"][..], &["--model"], &["--local=true"], &["--local", "--local"], &["exec"], &["exec", "one", "two"], &["serve", "--port", "65536"], &["providers", "enable", "id", "yes"], &["check", "--cloud"], &["context", "--budget=-1"]] {
+            assert_eq!(parse(args).unwrap_err().code, 2, "{args:?}");
+        }
+        assert!(!parse(&["providers", "set", "id", "secret", "other-secret"]).unwrap_err().text.contains("secret"));
+    }
+    #[test]
+    fn help_is_successful_without_required_arguments() {
+        for args in [&["--help"][..], &["help", "exec"], &["exec", "-h"], &["providers", "set", "--help"]] {
+            assert_eq!(parse(args).unwrap_err().code, 0);
+        }
+    }
+}

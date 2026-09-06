@@ -27,7 +27,7 @@ pub async fn ws_terminal_handler(
 }
 
 async fn handle_terminal_socket(socket: WebSocket, manager: TerminalSessionManager) {
-    let session_id = format!("term-{}", rand::random::<u32>());
+    let session_id = match crate::random::system_u64() { Ok(id) => format!("term-{id:016x}"), Err(error) => { crate::cki_error!("Cannot create terminal session identifier: {error}"); return; } };
 
     let reader = match manager.create_session(&session_id, 120, 30, None) {
         Ok(reader) => reader,

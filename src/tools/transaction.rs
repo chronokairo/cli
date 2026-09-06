@@ -97,7 +97,7 @@ pub struct WorkspaceTransaction {
     max_bytes: usize,
 }
 impl WorkspaceTransaction {
-    pub fn begin(root: PathBuf, max_bytes: usize) -> anyhow::Result<Self> {
+    pub fn begin(root: PathBuf, max_bytes: usize) -> crate::error::Result<Self> {
         let root = root.canonicalize().unwrap_or(root);
         let baseline = scan_workspace(&root, max_bytes)?;
         Ok(Self {
@@ -107,7 +107,7 @@ impl WorkspaceTransaction {
         })
     }
 
-    pub fn diff(&self) -> anyhow::Result<WorkspaceDiff> {
+    pub fn diff(&self) -> crate::error::Result<WorkspaceDiff> {
         let current = scan_workspace(&self.root, self.max_bytes)?;
         let mut diff = WorkspaceDiff::default();
         for (path, bytes) in &current {
@@ -166,7 +166,7 @@ impl WorkspaceTransaction {
     /// Unified diff for a single relative path, or `None` when the file is
     /// unchanged or unknown. `added`/`deleted` files render as a full-file
     /// hunk; `modified` files use a diffy Myers diff with `a/`/`b/` headers.
-    pub fn diff_for_file(&self, path: &str) -> anyhow::Result<Option<String>> {
+    pub fn diff_for_file(&self, path: &str) -> crate::error::Result<Option<String>> {
         let rel = Path::new(path);
         let baseline = self.baseline.get(rel);
         let current = fs::read(self.root.join(rel)).ok();
@@ -204,7 +204,7 @@ impl WorkspaceTransaction {
         }
     }
 
-    pub fn rollback(&self) -> anyhow::Result<WorkspaceDiff> {
+    pub fn rollback(&self) -> crate::error::Result<WorkspaceDiff> {
         let before = self.diff()?;
         let current = scan_workspace(&self.root, self.max_bytes)?;
         for path in current.keys() {
@@ -223,7 +223,7 @@ impl WorkspaceTransaction {
     }
 }
 
-fn scan_workspace(root: &Path, max_bytes: usize) -> anyhow::Result<BTreeMap<PathBuf, Vec<u8>>> {
+fn scan_workspace(root: &Path, max_bytes: usize) -> crate::error::Result<BTreeMap<PathBuf, Vec<u8>>> {
     let mut files = BTreeMap::new();
     let mut total = 0usize;
     let scan_budget = std::time::Duration::from_secs(
@@ -294,7 +294,7 @@ fn scan_workspace(root: &Path, max_bytes: usize) -> anyhow::Result<BTreeMap<Path
         max_bytes: usize,
         total: &mut usize,
         files: &mut BTreeMap<PathBuf, Vec<u8>>,
-    ) -> anyhow::Result<()> {
+    ) -> crate::error::Result<()> {
         if started.elapsed() > *scan_budget {
             crate::cki_warn!(
                 "workspace snapshot scan exceeded {}s — skipping remaining files",
@@ -347,7 +347,7 @@ fn scan_workspace(root: &Path, max_bytes: usize) -> anyhow::Result<BTreeMap<Path
                 let bytes = fs::read(&path)?;
                 *total = total.saturating_add(bytes.len());
                 if *total > max_bytes {
-                    anyhow::bail!("workspace transaction snapshot exceeds {} bytes", max_bytes);
+                    crate::error::bail!("workspace transaction snapshot exceeds {} bytes", max_bytes);
                 }
                 files.insert(rel.to_path_buf(), bytes);
             }

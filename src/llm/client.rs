@@ -1,5 +1,5 @@
 use crate::llm::infer::engine::InferenceEngine;
-use anyhow::{Context, Result};
+use crate::error::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 
@@ -342,9 +342,9 @@ impl LlmClient {
             LlmClient::Local(eng) => {
                 let mut eng = eng
                     .lock()
-                    .map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
+                    .map_err(|e| crate::error::anyhow!("Lock error: {}", e))?;
                 eng.generate(prompt, 512, 0.8, 40)
-                    .map_err(|e| anyhow::anyhow!("Local inference error: {}", e))
+                    .map_err(|e| crate::error::anyhow!("Local inference error: {}", e))
             }
         }
     }
@@ -357,7 +357,7 @@ impl LlmClient {
         tools: Option<&Vec<ToolDef>>,
         response_format: Option<&ResponseFormat>,
     ) -> Result<String> {
-        let mut last_err: Option<anyhow::Error> = None;
+        let mut last_err: Option<crate::error::Error> = None;
         for attempt in 0..3 {
             match self.generate(model, prompt, tools, response_format).await {
                 Ok(text) => return Ok(text),
@@ -370,7 +370,7 @@ impl LlmClient {
                 }
             }
         }
-        Err(last_err.unwrap_or_else(|| anyhow::anyhow!("LLM call failed")))
+        Err(last_err.unwrap_or_else(|| crate::error::anyhow!("LLM call failed")))
     }
 
     /// Stream a response, invoking `on_token` for each text chunk and
@@ -405,10 +405,10 @@ impl LlmClient {
             LlmClient::Local(eng) => {
                 let mut eng = eng
                     .lock()
-                    .map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
+                    .map_err(|e| crate::error::anyhow!("Lock error: {}", e))?;
                 let text = eng
                     .generate(prompt, 512, 0.8, 40)
-                    .map_err(|e| anyhow::anyhow!("Local inference error: {}", e))?;
+                    .map_err(|e| crate::error::anyhow!("Local inference error: {}", e))?;
                 on_token(&text);
                 Ok(text)
             }
@@ -460,10 +460,10 @@ impl LlmClient {
                     .join("\n");
                 let mut eng = eng
                     .lock()
-                    .map_err(|e| anyhow::anyhow!("Lock error: {}", e))?;
+                    .map_err(|e| crate::error::anyhow!("Lock error: {}", e))?;
                 let content = eng
                     .generate(&prompt, 512, 0.8, 40)
-                    .map_err(|e| anyhow::anyhow!("Local inference error: {}", e))?;
+                    .map_err(|e| crate::error::anyhow!("Local inference error: {}", e))?;
                 Ok(ChatCompletion {
                     content,
                     reasoning_content: String::new(),
@@ -526,7 +526,7 @@ impl LlmClient {
                 let mut eng = eng.lock().unwrap();
                 let text = eng
                     .generate(&prompt, 512, 0.8, 40)
-                    .map_err(|e| anyhow::anyhow!("Local inference error: {}", e))?;
+                    .map_err(|e| crate::error::anyhow!("Local inference error: {}", e))?;
                 if !text.is_empty() {
                     on_token(&text);
                 }
@@ -652,7 +652,7 @@ impl OllamaClient {
         if !resp.status().is_success() {
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
-            anyhow::bail!("Ollama chat request failed: HTTP {status} {text}");
+            crate::error::bail!("Ollama chat request failed: HTTP {status} {text}");
         }
 
         let data: ChatResponse = resp
@@ -716,7 +716,7 @@ impl OllamaClient {
         if !resp.status().is_success() {
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
-            anyhow::bail!("Ollama stream request failed: HTTP {status} {text}");
+            crate::error::bail!("Ollama stream request failed: HTTP {status} {text}");
         }
 
         let mut buffer: Vec<u8> = Vec::new();
@@ -838,7 +838,7 @@ impl OllamaClient {
         if !resp.status().is_success() {
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
-            anyhow::bail!("Ollama stream request failed: HTTP {status} {text}");
+            crate::error::bail!("Ollama stream request failed: HTTP {status} {text}");
         }
 
         let mut buffer: Vec<u8> = Vec::new();
@@ -1036,7 +1036,7 @@ impl CloudClient {
         if !resp.status().is_success() {
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
-            anyhow::bail!("cloud completions request failed: HTTP {status} {text}");
+            crate::error::bail!("cloud completions request failed: HTTP {status} {text}");
         }
 
         let data: serde_json::Value = resp
@@ -1100,7 +1100,7 @@ impl CloudClient {
         }
 
         const MAX_RETRIES: u32 = 5;
-        let mut last_err: Option<anyhow::Error> = None;
+        let mut last_err: Option<crate::error::Error> = None;
 
         for attempt in 0..=MAX_RETRIES {
             let resp = self
@@ -1158,14 +1158,14 @@ impl CloudClient {
                     backoff_ms
                 );
                 tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
-                last_err = Some(anyhow::anyhow!("cloud chat: HTTP {status} {text}"));
+                last_err = Some(crate::error::anyhow!("cloud chat: HTTP {status} {text}"));
                 continue;
             }
 
-            anyhow::bail!("cloud chat request failed: HTTP {status} {text}");
+            crate::error::bail!("cloud chat request failed: HTTP {status} {text}");
         }
 
-        Err(last_err.unwrap_or_else(|| anyhow::anyhow!("cloud chat failed after retries")))
+        Err(last_err.unwrap_or_else(|| crate::error::anyhow!("cloud chat failed after retries")))
     }
 
     /// Stream a chat completion (SSE), feeding content deltas to `on_token`
@@ -1203,7 +1203,7 @@ impl CloudClient {
         if !resp.status().is_success() {
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
-            anyhow::bail!("cloud stream request failed: HTTP {status} {text}");
+            crate::error::bail!("cloud stream request failed: HTTP {status} {text}");
         }
 
         let mut buffer: Vec<u8> = Vec::new();
@@ -1304,7 +1304,7 @@ impl CloudClient {
         if !resp.status().is_success() {
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
-            anyhow::bail!("cloud stream request failed: HTTP {status} {text}");
+            crate::error::bail!("cloud stream request failed: HTTP {status} {text}");
         }
 
         let mut buffer: Vec<u8> = Vec::new();
@@ -1592,14 +1592,7 @@ mod tests {
 
     #[tokio::test]
     async fn stream_chat_meta_parses_sse_content_deltas() {
-        let mock = wiremock::MockServer::start().await;
-        wiremock::Mock::given(wiremock::matchers::method("POST"))
-            .and(wiremock::matchers::path("/chat/completions"))
-            .respond_with(wiremock::ResponseTemplate::new(200).set_body_string(
-                "data: {\"choices\":[{\"delta\":{\"content\":\"Hello\"}}]}\r\ndata: [DONE]\r\n",
-            ))
-            .mount(&mock)
-            .await;
+        let mock = SseFixture::start("data: {\"choices\":[{\"delta\":{\"content\":\"Hello\"}}]}\r\ndata: [DONE]\r\n");
 
         let client = CloudClient::new(&mock.uri(), "k");
         let mut tokens = Vec::new();
@@ -1623,15 +1616,7 @@ mod tests {
 
     #[tokio::test]
     async fn stream_chat_meta_parses_sse_tool_call_deltas() {
-        let mock = wiremock::MockServer::start().await;
-        wiremock::Mock::given(wiremock::matchers::method("POST"))
-            .and(wiremock::matchers::path("/chat/completions"))
-            .respond_with(wiremock::ResponseTemplate::new(200)
-                .set_body_string(
-                    "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\\\"src/lib.rs\\\"}\"}}]}}]}\r\ndata: [DONE]\r\n",
-                ))
-            .mount(&mock)
-            .await;
+        let mock = SseFixture::start("data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\\\"src/lib.rs\\\"}\"}}]}}]}\r\ndata: [DONE]\r\n");
 
         let client = CloudClient::new(&mock.uri(), "k");
         let mut tokens = Vec::new();
@@ -1655,15 +1640,7 @@ mod tests {
 
     #[tokio::test]
     async fn stream_chat_meta_returns_usage_from_sse() {
-        let mock = wiremock::MockServer::start().await;
-        wiremock::Mock::given(wiremock::matchers::method("POST"))
-            .and(wiremock::matchers::path("/chat/completions"))
-            .respond_with(wiremock::ResponseTemplate::new(200)
-                .set_body_string(
-                    "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5,\"total_tokens\":15}}\r\ndata: [DONE]\r\n",
-                ))
-            .mount(&mock)
-            .await;
+        let mock = SseFixture::start("data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}],\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5,\"total_tokens\":15}}\r\ndata: [DONE]\r\n");
 
         let client = CloudClient::new(&mock.uri(), "k");
         let mut tokens = Vec::new();
@@ -1687,15 +1664,7 @@ mod tests {
 
     #[tokio::test]
     async fn stream_chat_meta_emits_token_usage_event() {
-        let mock = wiremock::MockServer::start().await;
-        wiremock::Mock::given(wiremock::matchers::method("POST"))
-            .and(wiremock::matchers::path("/chat/completions"))
-            .respond_with(wiremock::ResponseTemplate::new(200)
-                .set_body_string(
-                    "data: {\"choices\":[{\"delta\":{\"content\":\"done\"}}],\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":50,\"total_tokens\":150}}\r\ndata: [DONE]\r\n",
-                ))
-            .mount(&mock)
-            .await;
+        let mock = SseFixture::start("data: {\"choices\":[{\"delta\":{\"content\":\"done\"}}],\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":50,\"total_tokens\":150}}\r\ndata: [DONE]\r\n");
 
         let client = CloudClient::new(&mock.uri(), "k");
         let mut tokens = Vec::new();
@@ -1715,4 +1684,72 @@ mod tests {
         let completion = result.unwrap();
         assert_eq!(completion.content, "done");
     }
-}
+
+    /// One-request loopback server for exercising the real HTTP/SSE client.
+    /// Checks the request route and drains the JSON body before replying.
+    struct SseFixture {
+        address: std::net::SocketAddr,
+        stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        worker: Option<std::thread::JoinHandle<std::io::Result<()>>>,
+    }
+    impl SseFixture {
+        fn start(body: &'static str) -> Self {
+            use std::io::{BufRead, Read, Write};
+            use std::sync::atomic::Ordering;
+            use std::time::{Duration, Instant};
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let cancelled = stop.clone();
+            let worker = std::thread::spawn(move || {
+                let deadline = Instant::now() + Duration::from_secs(10);
+                let mut stream = loop {
+                    match listener.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                            if cancelled.load(Ordering::Relaxed) || Instant::now() > deadline {
+                                return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "SSE fixture received no request"));
+                            }
+                            std::thread::sleep(Duration::from_millis(2));
+                        }
+                        Err(e) => return Err(e),
+                    }
+                };
+                stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+                stream.set_write_timeout(Some(Duration::from_secs(5)))?;
+                let mut reader = std::io::BufReader::new(&mut stream);
+                let mut line = String::new();
+                reader.read_line(&mut line)?;
+                assert_eq!(line.trim_end(), "POST /chat/completions HTTP/1.1");
+                let mut length = 0;
+                loop {
+                    line.clear();
+                    if reader.read_line(&mut line)? == 0 { return Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "incomplete headers")); }
+                    if line == "\r\n" { break; }
+                    if let Some((key, value)) = line.split_once(':') {
+                        if key.eq_ignore_ascii_case("content-length") { length = value.trim().parse::<usize>().unwrap(); }
+                    }
+                }
+                assert!((1..=1_048_576).contains(&length));
+                let mut request = vec![0; length];
+                reader.read_exact(&mut request)?;
+                let request: serde_json::Value = serde_json::from_slice(&request).unwrap();
+                assert_eq!(request["stream"], true);
+                assert!(request["messages"].is_array());
+                drop(reader);
+                write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len())?;
+                stream.write_all(body.as_bytes())?;
+                stream.flush()
+            });
+            Self { address, stop, worker: Some(worker) }
+        }
+        fn uri(&self) -> String { format!("http://{}", self.address) }
+    }
+    impl Drop for SseFixture {
+        fn drop(&mut self) {
+            self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+            let result = self.worker.take().unwrap().join();
+            if !std::thread::panicking() { result.expect("SSE fixture worker panicked").expect("SSE fixture failed"); }
+        }
+    }}

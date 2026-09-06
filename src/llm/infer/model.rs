@@ -1,6 +1,14 @@
 use crate::llm::infer::gguf::{GgmlType, GgufReader};
 use std::collections::HashMap;
 
+/// GGUF F32 values are little endian and need not be aligned in the byte buffer.
+pub fn decode_f32(data: &[u8], out: &mut [f32]) {
+    assert_eq!(data.len(), out.len() * 4, "invalid F32 tensor byte count");
+    for (bytes, value) in data.chunks_exact(4).zip(out) {
+        *value = f32::from_le_bytes(bytes.try_into().expect("four byte chunk"));
+    }
+}
+
 fn half_to_f32(h: u16) -> f32 {
     let sign = ((h & 0x8000) as u32) << 16;
     let exp = ((h >> 10) & 0x1F) as i32 - 15 + 127;
@@ -95,8 +103,7 @@ impl Tensor {
         let n = self.nelements();
         match self.ty {
             GgmlType::F32 => {
-                let src = bytemuck::cast_slice::<u8, f32>(&self.data);
-                out[..n as usize].copy_from_slice(&src[..n as usize]);
+                decode_f32(&self.data[..n as usize * 4], &mut out[..n as usize]);
             }
             GgmlType::F16 => dequantize_f16_row(&self.data, out, n),
             GgmlType::Q4_0 => {
@@ -148,7 +155,7 @@ pub struct Model {
 }
 
 impl Model {
-    pub fn load(path: &str) -> anyhow::Result<Self> {
+    pub fn load(path: &str) -> crate::error::Result<Self> {
         let reader = GgufReader::load(path)?;
 
         // Detect architecture prefix (gemma3, qwen3, llama, mistral, etc.)
@@ -387,4 +394,21 @@ fn dequantize_q5_0(data: &[u8], out: &mut [f32], n: i64) {
             out[y_base + i] = d * q as f32;
         }
     }
+}
+
+#[cfg(test)]
+mod native_f32_tests {
+    use super::*;
+    #[test]
+    fn decodes_unaligned_little_endian_and_preserves_bits() {
+        let bits = [0x3f800000u32, 0xc0200000, 0x80000000, 0x7f800000, 0x7fc01234];
+        let mut bytes = vec![0xff];
+        for value in bits { bytes.extend_from_slice(&value.to_le_bytes()); }
+        let mut out = [0.; 5];
+        decode_f32(&bytes[1..], &mut out);
+        assert_eq!(out.map(f32::to_bits), bits);
+    }
+    #[test]
+    #[should_panic(expected = "invalid F32 tensor byte count")]
+    fn rejects_truncated_values() { decode_f32(&[0; 3], &mut [0.]); }
 }

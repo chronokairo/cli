@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use crate::error::{Context, Result};
 use serde_json::Value;
 use std::io::{BufRead, BufReader, Write};
 
@@ -84,7 +84,7 @@ impl McpClient {
                 }
             }
         }
-        anyhow::bail!("MCP server closed connection without response")
+        crate::error::bail!("MCP server closed connection without response")
     }
 
     fn initialize(&mut self) -> Result<()> {

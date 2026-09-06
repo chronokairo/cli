@@ -8,7 +8,7 @@ use crate::tools::background::TaskStatus;
 use crate::tools::shell;
 use crate::tools::test::{self, VerificationResult, VerificationStatus};
 use crate::ui::AgentMode;
-use anyhow::Result;
+use crate::error::Result;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
@@ -1066,7 +1066,7 @@ fn execute_read_only(
                     (Some(start), Some(end)) => context.files.read_file_range(path, start, end),
                     (Some(start), None) => context.files.read_file_range(path, start, start + 199),
                     _ => context.files.read_file(path).ok_or_else(|| {
-                        anyhow::anyhow!("file not found or path is outside workspace")
+                        crate::error::anyhow!("file not found or path is outside workspace")
                     }),
                 };
                 ToolExecutionResult::output(
@@ -1154,7 +1154,7 @@ fn execute_tool(
             let previous_content = state.files.read_file(path);
             let result = if tc.function.name == "write_file" {
                 string_arg("content")
-                    .ok_or_else(|| anyhow::anyhow!("missing required argument: content"))
+                    .ok_or_else(|| crate::error::anyhow!("missing required argument: content"))
                     .and_then(|content| state.files.write_file(path, content))
             } else if tc.function.name == "edit_file" {
                 let start = usize_arg("start_line");
@@ -1168,14 +1168,14 @@ fn execute_tool(
                             state.files.edit_file(path, start, end, old, new_content)
                         }
                     }
-                    None => Err(anyhow::anyhow!("missing required argument: new_content")),
+                    None => Err(crate::error::anyhow!("missing required argument: new_content")),
                 }
             } else if tc.function.name == "multi_edit_file" {
-                let parsed = || -> anyhow::Result<Vec<crate::tools::fs::MultiEdit>> {
+                let parsed = || -> crate::error::Result<Vec<crate::tools::fs::MultiEdit>> {
                     let arr = args
                         .get("edits")
                         .and_then(|value| value.as_array())
-                        .ok_or_else(|| anyhow::anyhow!("missing required argument: edits"))?;
+                        .ok_or_else(|| crate::error::anyhow!("missing required argument: edits"))?;
                     let mut edits = Vec::with_capacity(arr.len());
                     for entry in arr {
                         let start_line = entry
@@ -1187,7 +1187,7 @@ fn execute_tool(
                             .and_then(|v| v.as_u64())
                             .and_then(|v| usize::try_from(v).ok());
                         let (Some(start_line), Some(end_line)) = (start_line, end_line) else {
-                            anyhow::bail!("each edit requires integer start_line and end_line");
+                            crate::error::bail!("each edit requires integer start_line and end_line");
                         };
                         let old_content = entry
                             .get("old_content")
@@ -1196,7 +1196,7 @@ fn execute_tool(
                         let new_content = entry
                             .get("new_content")
                             .and_then(|v| v.as_str())
-                            .ok_or_else(|| anyhow::anyhow!("each edit requires new_content"))?
+                            .ok_or_else(|| crate::error::anyhow!("each edit requires new_content"))?
                             .to_string();
                         edits.push(crate::tools::fs::MultiEdit {
                             start_line,
@@ -1211,7 +1211,7 @@ fn execute_tool(
             } else {
                 match (string_arg("old"), string_arg("new")) {
                     (Some(old), Some(new)) => state.files.replace_exact(path, old, new),
-                    _ => Err(anyhow::anyhow!("missing required arguments: old, new")),
+                    _ => Err(crate::error::anyhow!("missing required arguments: old, new")),
                 }
             };
             match result {
@@ -2567,7 +2567,7 @@ async fn run_planner_fallback(
 
         // Small models sometimes answer a repair prompt in prose instead of
         // emitting tool calls; give each round one strict dry protocol recovery re-ask first.
-        let mut outcome: Option<Result<ToolLoopOutcome, anyhow::Error>> = None;
+        let mut outcome: Option<Result<ToolLoopOutcome, crate::error::Error>> = None;
         for attempt in 0..2 {
             let iter_task = if attempt == 0 {
                 fix_task.clone()

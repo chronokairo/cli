@@ -1,11 +1,11 @@
-use anyhow::Context;
+use crate::error::Context;
 
 /// Fetch a URL (http/https) and return its text content. HTML pages are
 /// stripped to readable text. The response body is capped at `max_bytes`.
-pub fn http_fetch(url: &str, max_bytes: usize, timeout_secs: u64) -> anyhow::Result<String> {
+pub fn http_fetch(url: &str, max_bytes: usize, timeout_secs: u64) -> crate::error::Result<String> {
     let parsed = reqwest::Url::parse(url).context("invalid URL")?;
     if !matches!(parsed.scheme(), "http" | "https") {
-        anyhow::bail!("only http/https URLs are allowed");
+        crate::error::bail!("only http/https URLs are allowed");
     }
     let client = reqwest::blocking::Client::builder()
         .user_agent(web_ua())
@@ -14,7 +14,7 @@ pub fn http_fetch(url: &str, max_bytes: usize, timeout_secs: u64) -> anyhow::Res
         .context("building HTTP client")?;
     let response = client.get(parsed).send().context("HTTP request failed")?;
     if !response.status().is_success() {
-        anyhow::bail!("HTTP {}", response.status());
+        crate::error::bail!("HTTP {}", response.status());
     }
     let content_type = response
         .headers()
@@ -34,10 +34,10 @@ pub fn http_fetch(url: &str, max_bytes: usize, timeout_secs: u64) -> anyhow::Res
 
 /// Web search with no API key. Uses a SearXNG instance when `WEB_SEARCH_URL`
 /// is set (JSON endpoint), otherwise falls back to DuckDuckGo's HTML results.
-pub fn web_search(query: &str, max_results: usize, timeout_secs: u64) -> anyhow::Result<String> {
+pub fn web_search(query: &str, max_results: usize, timeout_secs: u64) -> crate::error::Result<String> {
     let query = query.trim();
     if query.is_empty() {
-        anyhow::bail!("query must not be empty");
+        crate::error::bail!("query must not be empty");
     }
     let client = reqwest::blocking::Client::builder()
         .user_agent(web_ua())
@@ -56,12 +56,12 @@ fn searxng_search(
     searxng_url: &str,
     query: &str,
     max_results: usize,
-) -> anyhow::Result<String> {
+) -> crate::error::Result<String> {
     let url = reqwest::Url::parse_with_params(searxng_url, &[("q", query), ("format", "json")])
         .context("invalid WEB_SEARCH_URL")?;
     let response = client.get(url).send().context("SearXNG request failed")?;
     if !response.status().is_success() {
-        anyhow::bail!("SearXNG HTTP {}", response.status());
+        crate::error::bail!("SearXNG HTTP {}", response.status());
     }
     let json: serde_json::Value = response.json().context("SearXNG returned invalid JSON")?;
     let results = json
@@ -80,7 +80,7 @@ fn searxng_search(
         out.push(format!("{title}\n{url}\n{snippet}"));
     }
     if out.is_empty() {
-        anyhow::bail!("no results for query");
+        crate::error::bail!("no results for query");
     }
     Ok(out.join("\n\n"))
 }
@@ -89,7 +89,7 @@ fn duckduckgo_search(
     client: &reqwest::blocking::Client,
     query: &str,
     max_results: usize,
-) -> anyhow::Result<String> {
+) -> crate::error::Result<String> {
     let url =
         reqwest::Url::parse_with_params("https://html.duckduckgo.com/html/", &[("q", query)])?;
     let response = client
@@ -97,12 +97,12 @@ fn duckduckgo_search(
         .send()
         .context("DuckDuckGo request failed")?;
     if !response.status().is_success() {
-        anyhow::bail!("DuckDuckGo HTTP {}", response.status());
+        crate::error::bail!("DuckDuckGo HTTP {}", response.status());
     }
     let body = response.text().context("reading DuckDuckGo response")?;
     let results = parse_ddg_results(&body, max_results.clamp(1, 20));
     if results.is_empty() {
-        anyhow::bail!("no results for query");
+        crate::error::bail!("no results for query");
     }
     Ok(results.join("\n\n"))
 }

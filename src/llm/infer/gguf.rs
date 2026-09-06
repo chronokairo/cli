@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use crate::error::{Context, Result};
 use std::collections::HashMap;
 use std::io::Read;
 
@@ -43,7 +43,7 @@ pub enum GgmlType {
 }
 
 impl TryFrom<i32> for GgmlType {
-    type Error = anyhow::Error;
+    type Error = crate::error::Error;
 
     fn try_from(value: i32) -> Result<Self, Self::Error> {
         match value {
@@ -79,7 +79,7 @@ impl TryFrom<i32> for GgmlType {
             31 => Ok(GgmlType::TQ1_0),
             32 => Ok(GgmlType::TQ2_0),
             33 => Ok(GgmlType::NVFP4),
-            other => anyhow::bail!("Unsupported or invalid GgmlType tag: {other}"),
+            other => crate::error::bail!("Unsupported or invalid GgmlType tag: {other}"),
         }
     }
 }
@@ -191,7 +191,7 @@ impl GgufReader {
         };
 
         let magic = rdr.read_u32(&mut pos)?;
-        anyhow::ensure!(magic == GGUF_MAGIC, "Not a valid GGUF file");
+        crate::error::ensure!(magic == GGUF_MAGIC, "Not a valid GGUF file");
         let _version = rdr.read_u32(&mut pos)?;
 
         let tensor_count = rdr.read_u64(&mut pos)? as usize;
@@ -330,7 +330,7 @@ impl GgufReader {
     fn read_bytes<'a>(&'a self, pos: &mut usize, len: usize) -> Result<&'a [u8]> {
         let end = pos.checked_add(len).context("GGUF offset overflow")?;
         if end > self.data.len() {
-            anyhow::bail!(
+            crate::error::bail!(
                 "unexpected EOF parsing GGUF at pos {pos} (requested {len} bytes, data len {})",
                 self.data.len()
             );

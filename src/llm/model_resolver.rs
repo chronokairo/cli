@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use crate::error::{bail, Result};
 use std::path::{Path, PathBuf};
 
 /// Resolves a model name (e.g. "gemma3:1b") or a direct path to a GGUF blob path.

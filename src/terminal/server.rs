@@ -19,7 +19,7 @@ use axum::{
     routing::get,
     Router,
 };
-use bytes::Bytes;
+
 use serde::Deserialize;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -46,7 +46,7 @@ struct Resize {
 }
 
 /// Serve the terminal UI on `addr:port`, spawning `argv` in the PTY.
-pub async fn serve(addr: &str, port: u16, argv: Vec<String>, cwd: PathBuf) -> anyhow::Result<()> {
+pub async fn serve(addr: &str, port: u16, argv: Vec<String>, cwd: PathBuf) -> crate::error::Result<()> {
     let state = AppState {
         argv: Arc::new(argv),
         cwd,
@@ -131,7 +131,7 @@ async fn session(socket: WebSocket, state: AppState) {
     loop {
         tokio::select! {
             Some(data) = out_rx.recv() => {
-                if socket.send(Message::Binary(Bytes::from(data))).await.is_err() {
+                if socket.send(Message::Binary(data.into())).await.is_err() {
                     break;
                 }
             }

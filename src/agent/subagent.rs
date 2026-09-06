@@ -1,7 +1,7 @@
 use crate::agent::state::AgentState;
 use crate::protocol::event_log::CanonicalEventLog;
 use crate::protocol::EventMsg;
-use anyhow::{anyhow, Result};
+use crate::error::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 
 /// Maximum nesting depth allowed for sub-agents to avoid infinite forks

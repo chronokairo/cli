@@ -3,7 +3,7 @@
 use super::kernels::KERNELS_SRC;
 use crate::llm::infer::gguf::GgmlType;
 use crate::llm::infer::model::Model;
-use anyhow::Result;
+use crate::error::Result;
 use ocl::{Buffer, Context, Device, DeviceType, Kernel, MemFlags, Platform, Program, Queue};
 use std::collections::HashMap;
 
@@ -41,7 +41,7 @@ impl GpuContext {
     /// Returns error if no GPU found or total VRAM insufficient.
     pub fn new(model: &Model) -> Result<Self> {
         let (platform, device) =
-            probe_gpu().ok_or_else(|| anyhow::anyhow!("No OpenCL GPU found"))?;
+            probe_gpu().ok_or_else(|| crate::error::anyhow!("No OpenCL GPU found"))?;
 
         let device_name: String = device.name().unwrap_or_default();
         crate::cki_info!("GPU: {}", device_name);
@@ -56,7 +56,7 @@ impl GpuContext {
             .src(KERNELS_SRC)
             .devices(device)
             .build(&context)
-            .map_err(|e| anyhow::anyhow!("OpenCL kernel compile error: {}", e))?;
+            .map_err(|e| crate::error::anyhow!("OpenCL kernel compile error: {}", e))?;
 
         crate::cki_info!("OpenCL kernels compiled successfully");
 
@@ -104,7 +104,7 @@ impl GpuContext {
                 .len(tensor.data.len())
                 .copy_host_slice(&tensor.data)
                 .build()
-                .map_err(|e| anyhow::anyhow!("GPU upload failed for {}: {}", name, e))?;
+                .map_err(|e| crate::error::anyhow!("GPU upload failed for {}: {}", name, e))?;
 
             total_bytes += tensor.data.len();
             weights.insert(

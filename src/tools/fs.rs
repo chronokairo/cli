@@ -369,10 +369,10 @@ impl FileTools {
         }
     }
 
-    pub fn remove_file(&self, path: &str) -> anyhow::Result<()> {
+    pub fn remove_file(&self, path: &str) -> crate::error::Result<()> {
         let target = self
             .resolve(path)
-            .ok_or_else(|| anyhow::anyhow!("path is outside workspace"))?;
+            .ok_or_else(|| crate::error::anyhow!("path is outside workspace"))?;
         if target.exists() {
             std::fs::remove_file(target)?;
         }
@@ -447,17 +447,17 @@ impl FileTools {
         fs::read_to_string(p).ok()
     }
 
-    pub fn write_file(&self, path: &str, content: &str) -> anyhow::Result<()> {
+    pub fn write_file(&self, path: &str, content: &str) -> crate::error::Result<()> {
         let p = self
             .resolve(path)
-            .ok_or_else(|| anyhow::anyhow!("path must be inside the workspace"))?;
+            .ok_or_else(|| crate::error::anyhow!("path must be inside the workspace"))?;
         self.atomic_write(&p, content)
     }
 
-    pub fn append_file(&self, path: &str, content: &str) -> anyhow::Result<()> {
+    pub fn append_file(&self, path: &str, content: &str) -> crate::error::Result<()> {
         let p = self
             .resolve(path)
-            .ok_or_else(|| anyhow::anyhow!("path must be relative to the workspace"))?;
+            .ok_or_else(|| crate::error::anyhow!("path must be relative to the workspace"))?;
         if let Some(parent) = p.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -502,13 +502,13 @@ impl FileTools {
         path: &str,
         start_line: usize,
         end_line: usize,
-    ) -> anyhow::Result<String> {
+    ) -> crate::error::Result<String> {
         if start_line == 0 || end_line < start_line {
-            anyhow::bail!("line range must be 1-based and end_line >= start_line");
+            crate::error::bail!("line range must be 1-based and end_line >= start_line");
         }
         let content = self
             .read_file(path)
-            .ok_or_else(|| anyhow::anyhow!("file not found or path is outside workspace"))?;
+            .ok_or_else(|| crate::error::anyhow!("file not found or path is outside workspace"))?;
         let lines: Vec<&str> = content.lines().collect();
         let selected = lines
             .iter()
@@ -532,15 +532,15 @@ impl FileTools {
         path: &str,
         max_depth: usize,
         max_entries: usize,
-    ) -> anyhow::Result<String> {
+    ) -> crate::error::Result<String> {
         let root = if path.is_empty() {
             self.workspace.clone()
         } else {
             self.resolve(path)
-                .ok_or_else(|| anyhow::anyhow!("path is outside workspace"))?
+                .ok_or_else(|| crate::error::anyhow!("path is outside workspace"))?
         };
         if !root.is_dir() {
-            anyhow::bail!("tree path is not a directory");
+            crate::error::bail!("tree path is not a directory");
         }
         let root_anchor = root.clone();
         let mut pending = vec![(root, 0usize)];
@@ -584,17 +584,17 @@ impl FileTools {
         Ok(output.join("\n"))
     }
 
-    pub fn replace_exact(&self, path: &str, old: &str, new: &str) -> anyhow::Result<()> {
+    pub fn replace_exact(&self, path: &str, old: &str, new: &str) -> crate::error::Result<()> {
         if old.is_empty() {
-            anyhow::bail!("old text must not be empty");
+            crate::error::bail!("old text must not be empty");
         }
         let target = self
             .resolve(path)
-            .ok_or_else(|| anyhow::anyhow!("path is outside workspace"))?;
+            .ok_or_else(|| crate::error::anyhow!("path is outside workspace"))?;
         let content = fs::read_to_string(&target)?;
         let matches = content.match_indices(old).count();
         if matches != 1 {
-            anyhow::bail!("expected exactly one match, found {matches}; file was not changed");
+            crate::error::bail!("expected exactly one match, found {matches}; file was not changed");
         }
         self.atomic_write(&target, &content.replacen(old, new, 1))
     }
@@ -606,23 +606,23 @@ impl FileTools {
         end_line: Option<usize>,
         old_content: Option<&str>,
         new_content: &str,
-    ) -> anyhow::Result<()> {
+    ) -> crate::error::Result<()> {
         let target = self
             .resolve(path)
-            .ok_or_else(|| anyhow::anyhow!("path is outside workspace"))?;
+            .ok_or_else(|| crate::error::anyhow!("path is outside workspace"))?;
         let content = fs::read_to_string(&target)?;
         let lines: Vec<&str> = content.lines().collect();
 
         match (start_line, end_line) {
             (Some(start), Some(end)) => {
                 if start == 0 || start > lines.len() + 1 {
-                    anyhow::bail!(
+                    crate::error::bail!(
                         "start_line {start} is out of bounds (file has {} lines)",
                         lines.len()
                     );
                 }
                 if end < start {
-                    anyhow::bail!("end_line {end} must be >= start_line {start}");
+                    crate::error::bail!("end_line {end} must be >= start_line {start}");
                 }
                 let end_idx = end.min(lines.len());
                 let start_idx = start - 1;
@@ -630,7 +630,7 @@ impl FileTools {
                 if let Some(old) = old_content {
                     let actual_slice = lines[start_idx..end_idx].join("\n");
                     if actual_slice.trim() != old.trim() {
-                        anyhow::bail!(
+                        crate::error::bail!(
                             "content mismatch at lines {start}-{end}:\nExpected:\n{}\n\nActual:\n{}",
                             old.trim(),
                             actual_slice.trim()
@@ -658,20 +658,20 @@ impl FileTools {
             }
             _ => {
                 let old = old_content.ok_or_else(|| {
-                    anyhow::anyhow!("start_line/end_line or old_content must be provided")
+                    crate::error::anyhow!("start_line/end_line or old_content must be provided")
                 })?;
                 self.replace_exact(path, old, new_content)
             }
         }
     }
 
-    pub fn multi_edit_file(&self, path: &str, edits: &[MultiEdit]) -> anyhow::Result<()> {
+    pub fn multi_edit_file(&self, path: &str, edits: &[MultiEdit]) -> crate::error::Result<()> {
         if edits.is_empty() {
-            anyhow::bail!("edits must not be empty");
+            crate::error::bail!("edits must not be empty");
         }
         let target = self
             .resolve(path)
-            .ok_or_else(|| anyhow::anyhow!("path is outside workspace"))?;
+            .ok_or_else(|| crate::error::anyhow!("path is outside workspace"))?;
         let content = fs::read_to_string(&target)?;
         let mut lines: Vec<String> = content.lines().map(String::from).collect();
 
@@ -683,7 +683,7 @@ impl FileTools {
             let earlier = &window[0];
             let later = &window[1];
             if earlier.start_line <= later.end_line {
-                anyhow::bail!(
+                crate::error::bail!(
                     "overlapping edits are not allowed: lines {}-{} overlaps lines {}-{}",
                     later.start_line,
                     later.end_line,
@@ -695,14 +695,14 @@ impl FileTools {
 
         for edit in &sorted {
             if edit.start_line == 0 || edit.start_line > lines.len() + 1 {
-                anyhow::bail!(
+                crate::error::bail!(
                     "start_line {} is out of bounds (file has {} lines)",
                     edit.start_line,
                     lines.len()
                 );
             }
             if edit.end_line < edit.start_line {
-                anyhow::bail!(
+                crate::error::bail!(
                     "end_line {} must be >= start_line {}",
                     edit.end_line,
                     edit.start_line
@@ -714,7 +714,7 @@ impl FileTools {
             if let Some(old) = &edit.old_content {
                 let actual_slice = lines[start_idx..end_idx].join("\n");
                 if actual_slice.trim() != old.trim() {
-                    anyhow::bail!(
+                    crate::error::bail!(
                         "content mismatch at lines {}-{}:\nExpected:\n{}\n\nActual:\n{}",
                         edit.start_line,
                         edit.end_line,
@@ -735,10 +735,10 @@ impl FileTools {
         self.atomic_write(&target, &joined)
     }
 
-    fn atomic_write(&self, path: &Path, content: &str) -> anyhow::Result<()> {
+    fn atomic_write(&self, path: &Path, content: &str) -> crate::error::Result<()> {
         let parent = path
             .parent()
-            .ok_or_else(|| anyhow::anyhow!("file has no parent directory"))?;
+            .ok_or_else(|| crate::error::anyhow!("file has no parent directory"))?;
         fs::create_dir_all(parent)?;
         let counter = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
         let temporary = parent.join(format!(".anamnesic-{}-{counter}.tmp", std::process::id()));

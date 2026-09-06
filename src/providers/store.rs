@@ -1,5 +1,5 @@
 use crate::providers::Catalog;
-use anyhow::{Context, Result};
+use crate::error::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 #[cfg(unix)]

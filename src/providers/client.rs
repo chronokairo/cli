@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use crate::error::{Context, Result};
 use std::path::PathBuf;
 
 use super::types::{Catalog, CloudMatch, ModelInfo};
@@ -235,7 +235,7 @@ fn fetch_and_cache(cache: &PathBuf) -> Result<Catalog> {
         .send()
         .context("HTTP GET models.dev/api.json")?;
     if !resp.status().is_success() {
-        anyhow::bail!("models.dev: HTTP {} fetching {API_URL}", resp.status());
+        crate::error::bail!("models.dev: HTTP {} fetching {API_URL}", resp.status());
     }
     let body = resp.text().context("reading response body")?;
     let catalog: Catalog = serde_json::from_str(&body).context("parsing models.dev JSON")?;

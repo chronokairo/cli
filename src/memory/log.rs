@@ -26,7 +26,7 @@ pub struct LongTermMemory {
 }
 
 impl LongTermMemory {
-    pub fn new(db_path: PathBuf) -> anyhow::Result<Self> {
+    pub fn new(db_path: PathBuf) -> crate::error::Result<Self> {
         if let Some(parent) = db_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -76,8 +76,8 @@ impl LongTermMemory {
     /// The migration is race-safe: a concurrent open of the same file may add
     /// a column between the `PRAGMA` read and the `ALTER`, so a failed `ALTER`
     /// is retried through a fresh column read instead of aborting.
-    fn migrate_sessions_table(conn: &Connection) -> anyhow::Result<()> {
-        let read_columns = || -> anyhow::Result<Vec<String>> {
+    fn migrate_sessions_table(conn: &Connection) -> crate::error::Result<()> {
+        let read_columns = || -> crate::error::Result<Vec<String>> {
             let mut columns = Vec::new();
             let mut stmt = conn.prepare("PRAGMA table_info(sessions)")?;
             let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
@@ -107,7 +107,7 @@ impl LongTermMemory {
                 Err(_) => {
                     columns = read_columns()?;
                     if !columns.iter().any(|c| c == name) {
-                        return alter().map_err(anyhow::Error::from);
+                        return alter().map_err(crate::error::Error::from);
                     }
                 }
             }
@@ -120,7 +120,7 @@ impl LongTermMemory {
     }
 
     /// Create a new session record and return its id.
-    pub fn start_session(&self, workspace: &str, model: &str) -> anyhow::Result<i64> {
+    pub fn start_session(&self, workspace: &str, model: &str) -> crate::error::Result<i64> {
         let now = crate::types::time::now_local_rfc3339();
         self.conn.execute(
             "INSERT INTO sessions (timestamp, summary, context, workspace, model, updated_at, status, message_count)
@@ -137,7 +137,7 @@ impl LongTermMemory {
         &self,
         session_id: i64,
         messages: &[(i64, String, String)],
-    ) -> anyhow::Result<()> {
+    ) -> crate::error::Result<()> {
         if messages.is_empty() {
             return Ok(());
         }
@@ -171,7 +171,7 @@ impl LongTermMemory {
         title: &str,
         context: &str,
         model: &str,
-    ) -> anyhow::Result<()> {
+    ) -> crate::error::Result<()> {
         self.conn.execute(
             "UPDATE sessions SET
                 summary = COALESCE(NULLIF(?1, ''), summary),
@@ -194,7 +194,7 @@ impl LongTermMemory {
         source: &str,
         text: &str,
         embedding: &[f32],
-    ) -> anyhow::Result<()> {
+    ) -> crate::error::Result<()> {
         let mut blob = Vec::with_capacity(embedding.len() * 4);
         for value in embedding {
             blob.extend_from_slice(&value.to_le_bytes());
@@ -208,7 +208,7 @@ impl LongTermMemory {
     }
 
     /// Top-`k` vectors most similar to the (normalized) query embedding.
-    pub fn search_vectors(&self, query: &[f32], k: usize) -> anyhow::Result<Vec<VectorHit>> {
+    pub fn search_vectors(&self, query: &[f32], k: usize) -> crate::error::Result<Vec<VectorHit>> {
         let mut stmt = self
             .conn
             .prepare("SELECT text, source, embedding FROM memory_vectors")?;
@@ -247,7 +247,7 @@ impl LongTermMemory {
     }
 
     /// Recently active saved sessions for a workspace, newest first.
-    pub fn list_sessions(&self, workspace: &str, limit: usize) -> anyhow::Result<Vec<SessionInfo>> {
+    pub fn list_sessions(&self, workspace: &str, limit: usize) -> crate::error::Result<Vec<SessionInfo>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, timestamp, updated_at, summary, message_count, model
              FROM sessions
@@ -273,7 +273,7 @@ impl LongTermMemory {
     }
 
     /// Id of the most recently active session for a workspace, if any.
-    pub fn latest_session(&self, workspace: &str) -> anyhow::Result<Option<i64>> {
+    pub fn latest_session(&self, workspace: &str) -> crate::error::Result<Option<i64>> {
         let mut stmt = self.conn.prepare(
             "SELECT id FROM sessions
              WHERE workspace = ?1 AND status = 'active' AND message_count > 0
@@ -284,7 +284,7 @@ impl LongTermMemory {
     }
 
     /// Full transcript of a session as `(seq, role, content)`, in order.
-    pub fn load_session(&self, session_id: i64) -> anyhow::Result<Vec<(i64, String, String)>> {
+    pub fn load_session(&self, session_id: i64) -> crate::error::Result<Vec<(i64, String, String)>> {
         let mut stmt = self.conn.prepare(
             "SELECT seq, role, content FROM session_messages WHERE session_id = ?1 ORDER BY seq",
         )?;
@@ -303,7 +303,7 @@ impl LongTermMemory {
     }
 
     /// Stored compaction context for a session, if any.
-    pub fn session_context(&self, session_id: i64) -> anyhow::Result<Option<String>> {
+    pub fn session_context(&self, session_id: i64) -> crate::error::Result<Option<String>> {
         let mut stmt = self
             .conn
             .prepare("SELECT context FROM sessions WHERE id = ?1")?;
@@ -313,7 +313,7 @@ impl LongTermMemory {
     }
 
     /// Remove a saved conversation entirely.
-    pub fn delete_session(&self, session_id: i64) -> anyhow::Result<()> {
+    pub fn delete_session(&self, session_id: i64) -> crate::error::Result<()> {
         self.conn.execute(
             "DELETE FROM session_messages WHERE session_id = ?1",
             rusqlite::params![session_id],
@@ -328,7 +328,7 @@ impl LongTermMemory {
     /// Legacy compatibility shim: create a one-off session record and store
     /// `task` + `response` as a two-message transcript.  Used by CLI/planner
     /// paths that do not go through the full persist workflow.
-    pub fn save_session(&self, task: &str, response: &str) -> anyhow::Result<()> {
+    pub fn save_session(&self, task: &str, response: &str) -> crate::error::Result<()> {
         let ws = self
             .path
             .parent()
@@ -347,7 +347,7 @@ impl LongTermMemory {
 
     /// Return recently active sessions across all workspaces, newest first.
     /// Used by the CLI `--resume` flag.
-    pub fn get_recent_sessions(&self, limit: usize) -> anyhow::Result<Vec<(String, String)>> {
+    pub fn get_recent_sessions(&self, limit: usize) -> crate::error::Result<Vec<(String, String)>> {
         let mut stmt = self.conn.prepare(
             "SELECT updated_at, summary FROM sessions
              WHERE status = 'active' AND message_count > 0
@@ -363,7 +363,7 @@ impl LongTermMemory {
         Ok(result)
     }
 
-    pub fn save_decision(&self, decision: &str, reason: &str) -> anyhow::Result<()> {
+    pub fn save_decision(&self, decision: &str, reason: &str) -> crate::error::Result<()> {
         self.conn.execute(
             "INSERT INTO decisions (timestamp, decision, reason) VALUES (?1, ?2, ?3)",
             rusqlite::params![crate::types::time::now_local_rfc3339(), decision, reason],

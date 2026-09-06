@@ -1,6 +1,6 @@
 use crate::agent::agent_loop::PlanApprovalDecision;
 use crate::protocol::{ApprovalDecisionSerde, Op, Session};
-use anyhow::Result;
+use crate::error::Result;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};

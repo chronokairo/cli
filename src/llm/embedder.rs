@@ -1,4 +1,4 @@
-use anyhow::Result;
+use crate::error::Result;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -61,7 +61,7 @@ impl Embedder {
     /// normalization, so cosine similarity is a plain dot product.
     pub fn embed(&self, text: &str, kind: EmbedKind) -> Result<Vec<f32>> {
         let Some(source) = &self.source else {
-            anyhow::bail!(
+            crate::error::bail!(
                 "no embedding model configured — run `anamnesic --download-embedding-model` once (stores the model in ~/.anamnesic/models)"
             );
         };
@@ -147,7 +147,7 @@ pub fn download_embedding_model() -> Result<PathBuf> {
             Err(error) => println!("[{label}] download failed: {error}"),
         }
     }
-    anyhow::bail!(
+    crate::error::bail!(
         "all embedding model sources failed — check network access to huggingface.co (~0.6 GB each)"
     )
 }
@@ -155,7 +155,7 @@ pub fn download_embedding_model() -> Result<PathBuf> {
 fn download_to(client: &reqwest::blocking::Client, url: &str, target: &Path) -> Result<()> {
     let mut response = client.get(url).send()?;
     if !response.status().is_success() {
-        anyhow::bail!("HTTP {}", response.status());
+        crate::error::bail!("HTTP {}", response.status());
     }
     println!("  {url} → {}", target.display());
     let file = std::fs::File::create(target)?;

@@ -2,6 +2,11 @@
 // API that is not yet wired into the CLI — keep them compiling without dead-code noise.
 #![allow(dead_code)]
 
+mod cli_args;
+mod error;
+mod base64;
+mod random;
+mod password;
 mod agent;
 mod app_server;
 mod bench;
@@ -23,9 +28,9 @@ mod ui;
 
 use agent::agent_loop::run_agent_loop;
 use agent::state::AgentState;
-use anyhow::Result;
+use crate::error::Result;
 use app_server::AppServer;
-use clap::{Parser, Subcommand};
+use cli_args::{Cli, Commands, ProvidersAction};
 use config::settings::Config;
 use llm::client::LlmClient;
 use llm::infer::engine::InferenceEngine;
@@ -33,174 +38,17 @@ use llm::infer::gguf::GgufReader;
 use llm::infer::model::Model;
 use llm::infer::tokenizer::Tokenizer;
 use llm::model_resolver;
-use llm::router::{LlmRouter, DEFAULT_CLOUD_MODEL, DEFAULT_PROVIDER};
+use llm::router::{LlmRouter, DEFAULT_CLOUD_MODEL};
 use mcp::server::McpServer;
 use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
-fn init_file_logger() -> anyhow::Result<()> {
+fn init_file_logger() -> crate::error::Result<()> {
     logger::CkiLogger::init_file("anamnesic.log", logger::Level::Info)
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
+        .map_err(|e| crate::error::anyhow!("{e}"))?;
     Ok(())
-}
-
-#[derive(Parser)]
-#[command(
-    name = "cki",
-    about = "ChronoKairo CLI (CKI) — Zero-Lib coding agent & context harness"
-)]
-struct Cli {
-    #[command(subcommand)]
-    command: Option<Commands>,
-    /// Use local GGUF inference instead of Ollama
-    #[arg(long)]
-    local: bool,
-    /// Offload matrix multiplications to OpenCL GPU (requires --local and --features gpu)
-    #[arg(long)]
-    gpu: bool,
-    /// Model name (e.g. gemma3:1b) or path to a .gguf file
-    #[arg(long)]
-    model: Option<String>,
-    #[arg(short, long, default_value = ".")]
-    dir: String,
-    /// Use a cloud provider (OpenAI-compatible, e.g. NVIDIA NIM) for inference
-    #[arg(long)]
-    cloud: bool,
-    /// Cloud provider id (default: nvidia — NVIDIA NIM)
-    #[arg(long, default_value = DEFAULT_PROVIDER)]
-    provider: String,
-    /// Cloud model id for inference (overrides planner/coder/summarizer defaults)
-    #[arg(long)]
-    cloud_model: Option<String>,
-    /// Resume a previous session (lists saved sessions to pick from)
-    #[arg(long)]
-    resume: bool,
-    /// Continue the most recent session for this workspace without prompting
-    #[arg(long, alias = "continue")]
-    cont: bool,
-    /// Download the default embedding model (Qwen3-Embedding 0.6B Q8) into ~/.anamnesic/models for memory_search
-    #[arg(long)]
-    download_embedding_model: bool,
-    task: Option<String>,
-}
-
-#[derive(Subcommand)]
-enum Commands {
-    Check,
-    /// Launch the terminal UI
-    Tui,
-    /// Expose the TUI in the browser via xterm.js over WebSocket
-    Serve {
-        /// Listen address (default 127.0.0.1)
-        #[arg(long, default_value = "127.0.0.1")]
-        host: String,
-        /// Listen port
-        #[arg(long, default_value = "7681")]
-        port: u16,
-    },
-    Repl,
-    /// List locally available models
-    Models,
-    /// List cloud models from models.dev catalog
-    Cloud {
-        /// Filter by name/family/provider (empty = show all)
-        #[arg(default_value = "")]
-        query: String,
-    },
-    /// Configure and manage cloud provider API keys (stored securely at ~/.anamnesic/providers.toml)
-    Providers {
-        #[command(subcommand)]
-        action: ProvidersAction,
-    },
-    /// Benchmark all local models and show ranking vs hw_recommend predictions
-    Bench {
-        /// Category to evaluate against (general, coding, reasoning, chat)
-        #[arg(short, long, default_value = "coding")]
-        category: String,
-        /// Output JSON file for results
-        #[arg(short, long, default_value = "bench_results.json")]
-        output: String,
-        /// Also benchmark cloud models (requires API keys)
-        #[arg(long)]
-        cloud: bool,
-    },
-    /// Run a coding task headlessly (non-interactive)
-    Exec {
-        /// Task to execute
-        task: String,
-        /// Run in plan mode (generate plan first)
-        #[arg(long)]
-        plan: bool,
-        /// Output events as JSON Lines
-        #[arg(long)]
-        jsonl: bool,
-        /// Auto-approve all approvals (for CI)
-        #[arg(long)]
-        yes: bool,
-    },
-    /// Run JSON-RPC 2.0 app server over stdio (for IDE integration)
-    AppServer,
-    /// Run MCP server exposing the harness as tools
-    McpServer,
-    /// Translate a PDF document in real-time using local Ollama models
-    Translate {
-        /// Path to the PDF file
-        file: PathBuf,
-        /// Ollama model to use for translation (default: qwen2.5:7b)
-        #[arg(short, long, default_value = "qwen2.5:7b")]
-        model: String,
-        /// Target language (default: "Português (Brasil)")
-        #[arg(short, long, default_value = "Português (Brasil)")]
-        to: String,
-        /// GPU device to use ('0' for NVIDIA GTX 1650, '1' for Intel UHD, 'cpu' for CPU only, 'auto')
-        #[arg(short, long)]
-        gpu: Option<String>,
-        /// Output file path (e.g. translated.md)
-        #[arg(short, long)]
-        out: Option<PathBuf>,
-    },
-    /// Compile and display curated project context using the Zero-Lib ChronoContext engine
-    Context {
-        /// Optional task query to filter relevant domain documents
-        #[arg(short, long)]
-        task: Option<String>,
-        /// Character budget limit for the context pack
-        #[arg(short, long, default_value = "8000")]
-        budget: usize,
-    },
-}
-
-/// Sub-actions for `rust-agent providers`
-#[derive(Subcommand)]
-enum ProvidersAction {
-    /// List all providers from the models.dev catalog and their configuration status
-    List,
-    /// Show currently configured providers and their (masked) API keys
-    Show,
-    /// Set an API key for a provider  (e.g. rust-agent providers set openai sk-...)
-    Set {
-        /// Provider ID as in models.dev (e.g. openai, anthropic, groq, mistral)
-        provider: String,
-        /// API key — read from stdin if omitted (safer: avoids shell history)
-        api_key: Option<String>,
-        /// Override the API base URL (optional; uses provider default if not set)
-        #[arg(long)]
-        base: Option<String>,
-    },
-    /// Remove a provider's API key and config
-    Remove { provider: String },
-    /// Enable or disable a provider without removing its key
-    Enable {
-        provider: String,
-        #[arg(value_parser = clap::value_parser!(bool))]
-        enabled: bool,
-    },
-    /// Test connectivity and API key validity for a provider
-    Test { provider: String },
-    /// Import API keys from environment variables (reads models.dev env var names)
-    Import,
 }
 
 /// Default model for cloud inference.  Plain-name providers (Ollama Cloud)
@@ -302,7 +150,7 @@ async fn main() -> Result<()> {
         let path = match handle.join() {
             Ok(Ok(path)) => path,
             Ok(Err(error)) => return Err(error),
-            Err(_) => anyhow::bail!("embedding model download thread panicked"),
+            Err(_) => crate::error::bail!("embedding model download thread panicked"),
         };
         println!(
             "Embedding model ready at {} (global config dir — found automatically by memory_search from any project).",
@@ -393,7 +241,7 @@ async fn main() -> Result<()> {
                     client.mark_cloud(&model);
                 }
             }
-            ui::run_ui(client, state).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+            ui::run_ui(client, state).map_err(|e| crate::error::anyhow!(e.to_string()))?;
         }
         Some(Commands::Repl) => {
             repl(&client, &mut state).await?;
@@ -465,9 +313,9 @@ async fn main() -> Result<()> {
                         client.mark_cloud(&model);
                     }
                 }
-                ui::run_ui(client, state).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                ui::run_ui(client, state).map_err(|e| crate::error::anyhow!(e.to_string()))?;
             } else {
-                anyhow::bail!("no task or subcommand supplied; use --help for usage");
+                crate::error::bail!("no task or subcommand supplied; use --help for usage");
             }
         }
     }
@@ -771,11 +619,11 @@ async fn handle_providers(action: ProvidersAction) -> Result<()> {
                 None => {
                     // Read from stdin without echoing
                     eprint!("  API key for '{}' (input hidden): ", provider);
-                    rpassword::read_password().unwrap_or_default()
+                    crate::password::read_password()?
                 }
             };
             if key.is_empty() {
-                anyhow::bail!("API key cannot be empty");
+                crate::error::bail!("API key cannot be empty");
             }
             let mut store = ProviderStore::load();
             store.set_key(&provider, &key);

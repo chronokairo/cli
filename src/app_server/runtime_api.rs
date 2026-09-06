@@ -2,7 +2,7 @@
 //! All coding-runtime data is owned here; clients only render the result.
 
 use serde_json::{json, Value};
-use base64::Engine;
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -330,7 +330,7 @@ fn patch_commit(workspace: &Path, params: &Value, backup: bool) -> Result<Value,
                     return Err(format!("patch path escapes workspace: {relative}"));
                 }
                 let original = std::fs::read(&path).ok().map(|bytes| {
-                    base64::engine::general_purpose::STANDARD.encode(bytes)
+                    crate::base64::encode(bytes)
                 });
                 Ok(json!({"path": relative, "original": original}))
             })
@@ -377,8 +377,7 @@ fn revert_patch(workspace: &Path, params: &Value) -> Result<Value, String> {
         let parent = path.parent().unwrap_or(&canonical_workspace);
         std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
         if let Some(encoded) = entry.get("original").and_then(Value::as_str) {
-            let bytes = base64::engine::general_purpose::STANDARD
-                .decode(encoded)
+            let bytes = crate::base64::decode(encoded)
                 .map_err(|error| error.to_string())?;
             std::fs::write(&path, bytes).map_err(|error| error.to_string())?;
         } else if path.exists() {
@@ -708,6 +707,7 @@ mod tests {
 
     #[test]
     fn patch_dry_run_does_not_write_and_backup_can_revert() {
+        let _profile = crate::config::global_settings::TestHome::new();
         let workspace = test_workspace("patch");
         let file = workspace.join("sample.txt");
         std::fs::write(&file, "old\n").unwrap();

@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use crate::error::{Context, Result};
 use lopdf::content::Content;
 use lopdf::{Document, Object};
 use serde::{Deserialize, Serialize};
@@ -110,7 +110,7 @@ pub fn extract_text_from_pdf(path: &Path) -> Result<String> {
 
     let pages_map = doc.get_pages();
     if pages_map.is_empty() {
-        anyhow::bail!("O documento PDF não possui páginas válidas.");
+        crate::error::bail!("O documento PDF não possui páginas válidas.");
     }
 
     let mut full_extracted_text = String::new();
@@ -146,7 +146,7 @@ pub fn extract_text_from_pdf(path: &Path) -> Result<String> {
     }
 
     if full_extracted_text.trim().is_empty() {
-        anyhow::bail!("Nenhum texto pôde ser extraído. Se for um PDF escaneado (imagem pura), o OCR é necessário.");
+        crate::error::bail!("Nenhum texto pôde ser extraído. Se for um PDF escaneado (imagem pura), o OCR é necessário.");
     }
 
     Ok(full_extracted_text)
@@ -280,7 +280,7 @@ pub async fn translate_pdf_cli(
             .with_context(|| format!("Falha ao conectar com Ollama em {}", url))?;
 
         if !response.status().is_success() {
-            anyhow::bail!(
+            crate::error::bail!(
                 "Ollama retornou erro {}: {}",
                 response.status(),
                 response.text().await.unwrap_or_default()

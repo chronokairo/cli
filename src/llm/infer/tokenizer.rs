@@ -13,7 +13,7 @@ pub struct Tokenizer {
 }
 
 impl Tokenizer {
-    pub fn load_from_gguf(reader: &GgufReader) -> anyhow::Result<Self> {
+    pub fn load_from_gguf(reader: &GgufReader) -> crate::error::Result<Self> {
         let model_type = reader.get_metadata_str("tokenizer.ggml.model", "");
         let is_bpe = model_type == "gpt2" || model_type == "bpe";
 

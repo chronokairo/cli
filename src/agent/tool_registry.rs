@@ -4,7 +4,7 @@ use crate::llm::router::LlmRouter;
 use crate::tools::patch::apply_patch;
 use crate::tools::shell;
 use crate::tools::test::{self, VerificationResult};
-use anyhow::{anyhow, Result};
+use crate::error::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
-use anyhow::{Context, Result};
+use crate::error::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 /// Global user settings stored at `~/.anamnesic/settings.json`.
@@ -79,10 +79,36 @@ impl GlobalSettings {
 
 /// Best-effort `$HOME` (falls back to `$USERPROFILE` on Windows).
 pub fn home_dir() -> PathBuf {
+    #[cfg(test)]
+    if let Some(path) = TEST_HOME.with(|home| home.borrow().clone()) {
+        return path;
+    }
     std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("."))
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_HOME: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Isolate tests that persist keys or backups from the operator's real profile.
+#[cfg(test)]
+pub(crate) struct TestHome { previous: Option<PathBuf> }
+#[cfg(test)]
+impl TestHome {
+    pub(crate) fn new() -> Self {
+        let path = std::env::temp_dir().join(format!("cki-test-home-{}-{:016x}", std::process::id(), crate::random::system_u64().unwrap()));
+        std::fs::create_dir_all(&path).unwrap();
+        let previous = TEST_HOME.with(|home| home.replace(Some(path)));
+        Self { previous }
+    }
+}
+#[cfg(test)]
+impl Drop for TestHome {
+    fn drop(&mut self) { TEST_HOME.with(|home| home.replace(self.previous.take())); }
 }
 
 #[cfg(test)]
