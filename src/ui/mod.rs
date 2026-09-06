@@ -35,6 +35,7 @@ use crate::agent::state::AgentState;
 use crate::config::settings::ApprovalPolicy;
 use crate::llm::router::{LlmRouter, DEFAULT_PROVIDER};
 
+pub mod engine;
 mod diff_render;
 pub(crate) mod file_search;
 mod line_truncation;
