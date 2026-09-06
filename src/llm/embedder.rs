@@ -128,7 +128,7 @@ pub fn download_embedding_model() -> Result<PathBuf> {
     let dir = global_models_dir().join("embeddings");
     std::fs::create_dir_all(&dir)?;
     let client = reqwest::blocking::Client::builder()
-        .user_agent(format!("anamnesic-coder/{}", env!("CARGO_PKG_VERSION")))
+        .user_agent(format!("cki/{}", env!("CARGO_PKG_VERSION")))
         .timeout(std::time::Duration::from_secs(120))
         .build()?;
     for url in EMBEDDING_CANDIDATES {

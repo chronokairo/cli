@@ -86,8 +86,8 @@ fn init_file_logger() -> anyhow::Result<()> {
 
 #[derive(Parser)]
 #[command(
-    name = "chronokairo",
-    about = "Local coding agent — TinyCoder + llm-on-legacy-gpus fusion"
+    name = "cki",
+    about = "ChronoKairo CLI (CKI) — Zero-Lib coding agent & context harness"
 )]
 struct Cli {
     #[command(subcommand)]

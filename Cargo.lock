@@ -36,44 +36,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
 
 [[package]]
-name = "anamnesic-coder"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "axum",
- "base64",
- "bytemuck",
- "bytes",
- "chrono",
- "clap",
- "crossterm",
- "futures-util",
- "log",
- "lopdf",
- "lsp-types 0.97.0",
- "ocl",
- "parking_lot",
- "portable-pty",
- "pulldown-cmark",
- "rand 0.8.6",
- "ratatui",
- "rayon",
- "regex",
- "reqwest",
- "rpassword",
- "rusqlite",
- "serde",
- "serde_json",
- "simple_logger",
- "tokio",
- "tower-lsp",
- "unicode-segmentation",
- "unicode-width 0.2.0",
- "wiremock",
-]
-
-[[package]]
 name = "android_system_properties"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -338,6 +300,44 @@ dependencies = [
  "num-traits 0.2.19",
  "wasm-bindgen",
  "windows-link",
+]
+
+[[package]]
+name = "cki"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "axum",
+ "base64",
+ "bytemuck",
+ "bytes",
+ "chrono",
+ "clap",
+ "crossterm",
+ "futures-util",
+ "log",
+ "lopdf",
+ "lsp-types 0.97.0",
+ "ocl",
+ "parking_lot",
+ "portable-pty",
+ "pulldown-cmark",
+ "rand 0.8.6",
+ "ratatui",
+ "rayon",
+ "regex",
+ "reqwest",
+ "rpassword",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "simple_logger",
+ "tokio",
+ "tower-lsp",
+ "unicode-segmentation",
+ "unicode-width 0.2.0",
+ "wiremock",
 ]
 
 [[package]]

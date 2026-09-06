@@ -179,7 +179,7 @@ fn truncate_chars(text: &str, max_bytes: usize) -> String {
 }
 
 fn web_ua() -> String {
-    format!("anamnesic-coder/{}", env!("CARGO_PKG_VERSION"))
+    format!("cki/{}", env!("CARGO_PKG_VERSION"))
 }
 
 #[cfg(test)]

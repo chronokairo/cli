@@ -1,11 +1,11 @@
 [package]
-name = "anamnesic-coder"
+name = "cki"
 version = "0.1.0"
 edition = "2021"
-description = "Local coding agent — fusion of TinyCoder + llm-on-legacy-gpus"
+description = "ChronoKairo CLI (CKI) — Zero-Lib coding agent & context harness"
 
 [[bin]]
-name = "chronokairo"
+name = "cki"
 path = "src/main.rs"
 
 [features]

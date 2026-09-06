@@ -1,8 +1,8 @@
 1. Project Type and Tech Stack
 Language: Rust (2021 edition)  
 Build System: Cargo (Cargo.toml / Cargo.lock)  
-Binary: anamnesic (entry point: src/main.rs)  
-Description: "Local coding agent — plan → act → verify. Fusion of TinyCoder + llm-on-legacy-gpus"
+Binary: cki (entry point: src/main.rs)  
+Description: "ChronoKairo CLI (CKI) — Zero-Lib coding agent & context harness"
 Key Dependencies
 Category	Crates
 TUI	ratatui (0.29, with unstable-rendered-line-info), crossterm (0.28)

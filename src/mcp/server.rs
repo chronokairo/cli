@@ -30,7 +30,7 @@ impl McpServer {
             serde_json::json!({
                 "protocolVersion": "2024-11-05",
                 "capabilities": {},
-                "serverInfo": {"name": "anamnesic-coder", "version": "0.1.0"}
+                "serverInfo": {"name": "cki", "version": "0.1.0"}
             }),
         )?;
         self.write_notification("initialized", serde_json::json!({}))?;
@@ -183,7 +183,7 @@ impl McpServer {
                     let result = serde_json::json!({
                         "protocolVersion": "2024-11-05",
                         "capabilities": {},
-                        "serverInfo": {"name": "anamnesic-coder", "version": "0.1.0"}
+                        "serverInfo": {"name": "cki", "version": "0.1.0"}
                     });
                     self.write_response(id.unwrap_or(Value::Null), result)?;
                     self.write_notification("initialized", serde_json::json!({}))?;

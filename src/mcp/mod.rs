@@ -92,7 +92,7 @@ impl McpClient {
             "protocolVersion": "2024-11-05",
             "capabilities": {},
             "clientInfo": {
-                "name": "anamnesic-coder",
+                "name": "cki",
                 "version": "0.1.0"
             }
         });
