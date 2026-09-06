@@ -194,3 +194,82 @@ impl Vt {
         out.push('m');
     }
 }
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Span {
+    pub content: String,
+    pub style: Style,
+}
+
+impl Span {
+    pub fn raw<S: Into<String>>(content: S) -> Self {
+        Self {
+            content: content.into(),
+            style: Style::default(),
+        }
+    }
+
+    pub fn styled<S: Into<String>>(content: S, style: Style) -> Self {
+        Self {
+            content: content.into(),
+            style,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct Line {
+    pub spans: Vec<Span>,
+}
+
+impl Line {
+    pub fn new() -> Self {
+        Self { spans: Vec::new() }
+    }
+
+    pub fn from_spans(spans: Vec<Span>) -> Self {
+        Self { spans }
+    }
+
+    pub fn push(&mut self, span: Span) {
+        self.spans.push(span);
+    }
+}
+
+impl From<String> for Line {
+    fn from(s: String) -> Self {
+        Self {
+            spans: vec![Span::raw(s)],
+        }
+    }
+}
+
+impl From<&str> for Line {
+    fn from(s: &str) -> Self {
+        Self {
+            spans: vec![Span::raw(s)],
+        }
+    }
+}
+
+impl From<Span> for Line {
+    fn from(span: Span) -> Self {
+        Self { spans: vec![span] }
+    }
+}
+
+impl From<Vec<Span>> for Line {
+    fn from(spans: Vec<Span>) -> Self {
+        Self { spans }
+    }
+}
+
+impl std::fmt::Display for Line {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for span in &self.spans {
+            write!(f, "{}", span.content)?;
+        }
+        Ok(())
+    }
+}
+

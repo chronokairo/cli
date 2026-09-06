@@ -1,32 +1,29 @@
-//! Truncate styled ratatui `Line`s to a terminal display width, preserving
+//! Truncate styled `Line`s to a terminal display width, preserving
 //! grapheme boundaries and per-span styling.
 //!
 //! Adapted from OpenAI Codex's `tui/src/line_truncation.rs`.
 
-use ratatui::text::{Line, Span};
+use crate::ui::engine::{Line, Span};
 use crate::ui::width::{display_width, grapheme_indices};
 
-pub(crate) fn line_width(line: &Line<'_>) -> usize {
-    line.iter()
-        .map(|span| display_width(span.content.as_ref()))
+pub(crate) fn line_width(line: &Line) -> usize {
+    line.spans
+        .iter()
+        .map(|span| display_width(&span.content))
         .sum()
 }
 
-pub(crate) fn truncate_line_to_width(line: Line<'static>, max_width: usize) -> Line<'static> {
+pub(crate) fn truncate_line_to_width(line: Line, max_width: usize) -> Line {
     if max_width == 0 {
-        return Line::from(Vec::<Span<'static>>::new());
+        return Line::new();
     }
 
-    let Line {
-        style,
-        alignment,
-        spans,
-    } = line;
+    let Line { spans } = line;
     let mut used = 0usize;
-    let mut spans_out: Vec<Span<'static>> = Vec::with_capacity(spans.len());
+    let mut spans_out: Vec<Span> = Vec::with_capacity(spans.len());
 
     for span in spans {
-        let span_width = display_width(span.content.as_ref());
+        let span_width = display_width(&span.content);
 
         if span_width == 0 {
             spans_out.push(span);
@@ -44,7 +41,7 @@ pub(crate) fn truncate_line_to_width(line: Line<'static>, max_width: usize) -> L
         }
 
         let style = span.style;
-        let text = span.content.as_ref();
+        let text = &span.content;
         let mut end_idx = 0usize;
         for (idx, grapheme) in grapheme_indices(text) {
             let grapheme_width = display_width(grapheme);
@@ -62,11 +59,7 @@ pub(crate) fn truncate_line_to_width(line: Line<'static>, max_width: usize) -> L
         break;
     }
 
-    Line {
-        style,
-        alignment,
-        spans: spans_out,
-    }
+    Line { spans: spans_out }
 }
 
 /// Truncate a styled line to `max_width` and append an ellipsis on overflow.
@@ -75,11 +68,11 @@ pub(crate) fn truncate_line_to_width(line: Line<'static>, max_width: usize) -> L
 /// pre-scan + return original line unchanged) and uses `truncate_line_to_width`
 /// for the overflow case.
 pub(crate) fn truncate_line_with_ellipsis_if_overflow(
-    line: Line<'static>,
+    line: Line,
     max_width: usize,
-) -> Line<'static> {
+) -> Line {
     if max_width == 0 {
-        return Line::from(Vec::<Span<'static>>::new());
+        return Line::new();
     }
 
     if line_width(&line) <= max_width {
@@ -87,32 +80,24 @@ pub(crate) fn truncate_line_with_ellipsis_if_overflow(
     }
 
     let truncated = truncate_line_to_width(line, max_width.saturating_sub(1));
-    let Line {
-        style,
-        alignment,
-        mut spans,
-    } = truncated;
+    let Line { mut spans } = truncated;
     let ellipsis_style = spans.last().map(|span| span.style).unwrap_or_default();
     spans.push(Span::styled("…", ellipsis_style));
-    Line {
-        style,
-        alignment,
-        spans,
-    }
+    Line { spans }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::style::{Color, Style};
+    use crate::ui::engine::{Color, Style};
 
-    fn line(text: &str) -> Line<'static> {
+    fn line(text: &str) -> Line {
         Line::from(text.to_string())
     }
 
     #[test]
     fn line_width_sums_span_widths() {
-        let styled = Line::from(vec![
+        let styled = Line::from_spans(vec![
             Span::raw("olá"),
             Span::styled("界", Style::default().fg(Color::Red)),
         ]);
@@ -140,7 +125,7 @@ mod tests {
 
     #[test]
     fn truncate_line_to_width_preserves_span_styles() {
-        let styled = Line::from(vec![Span::styled("abcde", Style::default().fg(Color::Red))]);
+        let styled = Line::from_spans(vec![Span::styled("abcde", Style::default().fg(Color::Red))]);
         let out = truncate_line_to_width(styled, 3);
         assert_eq!(out.to_string(), "abc");
         assert_eq!(
@@ -161,3 +146,4 @@ mod tests {
         assert_eq!(out.to_string(), "abcdefg…");
     }
 }
+

@@ -6,5 +6,5 @@ pub mod vt;
 #[allow(unused_imports)]
 pub use framebuffer::{Cell, Framebuffer};
 #[allow(unused_imports)]
-pub use vt::{Color, Style, Vt};
+pub use vt::{Color, Line, Span, Style, Vt};
 

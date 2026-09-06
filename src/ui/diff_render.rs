@@ -5,19 +5,16 @@
 //! on top, none of which are needed for the minimal diff viewer here. Lines are
 //! classified by their leading character and styled accordingly.
 
-use ratatui::{
-    style::{Color, Modifier, Style},
-    text::{Line, Span},
-};
+use crate::ui::engine::{Color, Line, Span, Style};
 
 /// Style a single unified-diff line.
-fn style_diff_line(line: &str) -> Span<'static> {
+fn style_diff_line(line: &str) -> Span {
     if line.starts_with("@@") {
         Span::styled(
             line.to_string(),
             Style::default()
                 .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
+                .bold(),
         )
     } else if line.starts_with("--- a/") || line.starts_with("+++ b/") {
         Span::styled(line.to_string(), Style::default().fg(Color::Blue))
@@ -31,18 +28,19 @@ fn style_diff_line(line: &str) -> Span<'static> {
         // `diff --git`, `\ No newline at end of file`, etc.
         Span::styled(
             line.to_string(),
-            Style::default().add_modifier(Modifier::DIM),
+            Style::default().dim(),
         )
     }
 }
 
 /// Convert unified diff text into styled lines for a pager.
-pub fn diff_lines(diff_text: &str) -> Vec<Line<'static>> {
+pub fn diff_lines(diff_text: &str) -> Vec<Line> {
     diff_text
         .lines()
         .map(|line| Line::from(style_diff_line(line)))
         .collect()
 }
+
 
 #[cfg(test)]
 mod tests {
@@ -61,12 +59,12 @@ mod tests {
             style_diff_line("--- a/src/a.rs").style.fg,
             Some(Color::Blue)
         );
-        assert_eq!(
+        assert!(
             style_diff_line("\\ No newline at end of file")
                 .style
-                .add_modifier,
-            Modifier::DIM
+                .dim
         );
+
     }
 
     #[test]
