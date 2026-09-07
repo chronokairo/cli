@@ -31,13 +31,6 @@ pub(crate) enum Commands {
     Check,
     /// Launch the terminal UI
     Tui,
-    /// Expose the TUI in the browser via xterm.js over WebSocket
-    Serve {
-        /// Listen address (default 127.0.0.1)
-        host: String,
-        /// Listen port
-        port: u16,
-    },
     Repl,
     /// List locally available models
     Models,
@@ -142,7 +135,7 @@ const ROOT: &[(&str, &str, bool)] = &[
     ("cloud-model", "", true), ("resume", "", false), ("cont", "", false),
     ("download-embedding-model", "", false),
 ];
-const COMMANDS: &[&str] = &["check", "tui", "serve", "repl", "models", "cloud", "providers", "bench", "exec", "app-server", "mcp-server", "translate", "context"];
+const COMMANDS: &[&str] = &["check", "tui", "repl", "models", "cloud", "providers", "bench", "exec", "app-server", "mcp-server", "translate", "context"];
 
 #[derive(Default)]
 struct Options {
@@ -179,8 +172,7 @@ fn utf8(value: OsString, label: &str) -> Parsed<String> {
 }
 fn help(command: &str) -> String {
     let usage = match command {
-        "" => "[OPTIONS] [TASK] [COMMAND]\n\nCommands:\n  check  tui  serve  repl  models  cloud  providers  bench\n  exec   app-server  mcp-server  translate  context\n\nOptions:\n  --local  --gpu  --model <MODEL>  -d, --dir <DIR> [default: .]\n  --cloud  --provider <ID>  --cloud-model <MODEL>\n  --resume  --cont (alias: --continue)  --download-embedding-model",
-        "serve" => "[--host <HOST>] [--port <PORT>]\nDefaults: 127.0.0.1:7681",
+        "" => "[OPTIONS] [TASK] [COMMAND]\n\nCommands:\n  check  tui  repl  models  cloud  providers  bench\n  exec   app-server  mcp-server  translate  context\n\nOptions:\n  --local  --gpu  --model <MODEL>  -d, --dir <DIR> [default: .]\n  --cloud  --provider <ID>  --cloud-model <MODEL>\n  --resume  --cont (alias: --continue)  --download-embedding-model",
         "cloud" => "[QUERY]",
         "providers" => "<COMMAND>\nCommands: list, show, set, remove, enable, test, import",
         "providers set" => "<PROVIDER> [API_KEY] [--base <URL>]\nReads a hidden key from stdin when API_KEY is omitted.",
@@ -273,7 +265,6 @@ impl Cli {
 fn parse_command(command: &str, args: &mut VecDeque<OsString>) -> Parsed<Commands> {
     if command == "providers" { return Ok(Commands::Providers { action: parse_provider(args)? }); }
     let specs: &[(&str, &str, bool)] = match command {
-        "serve" => &[("host", "", true), ("port", "", true)],
         "bench" => &[("category", "c", true), ("output", "o", true), ("cloud", "", false)],
         "exec" => &[("plan", "", false), ("jsonl", "", false), ("yes", "", false)],
         "translate" => &[("model", "m", true), ("to", "t", true), ("gpu", "g", true), ("out", "o", true)],
@@ -284,7 +275,6 @@ fn parse_command(command: &str, args: &mut VecDeque<OsString>) -> Parsed<Command
     let parsed = match command {
         "check" => Commands::Check, "tui" => Commands::Tui, "repl" => Commands::Repl,
         "models" => Commands::Models, "app-server" => Commands::AppServer, "mcp-server" => Commands::McpServer,
-        "serve" => Commands::Serve { host: o.value_or("host", "127.0.0.1")?, port: o.number("port", "7681")? },
         "cloud" => Commands::Cloud { query: o.optional_text("QUERY")?.unwrap_or_default() },
         "bench" => Commands::Bench { category: o.value_or("category", "coding")?, output: o.value_or("output", "bench_results.json")?, cloud: o.flag("cloud") },
         "exec" => Commands::Exec { task: o.text("TASK")?, plan: o.flag("plan"), jsonl: o.flag("jsonl"), yes: o.flag("yes") },
@@ -326,7 +316,7 @@ mod tests {
     }
     #[test]
     fn every_command_parses() {
-        for args in [&["check"][..], &["tui"], &["serve"], &["repl"], &["models"], &["cloud"], &["bench"], &["exec", "task"], &["app-server"], &["mcp-server"], &["translate", "a.pdf"], &["context"], &["providers", "list"], &["providers", "show"], &["providers", "import"], &["providers", "remove", "id"], &["providers", "test", "id"], &["providers", "set", "id"], &["providers", "enable", "id", "false"]] {
+        for args in [&["check"][..], &["tui"], &["repl"], &["models"], &["cloud"], &["bench"], &["exec", "task"], &["app-server"], &["mcp-server"], &["translate", "a.pdf"], &["context"], &["providers", "list"], &["providers", "show"], &["providers", "import"], &["providers", "remove", "id"], &["providers", "test", "id"], &["providers", "set", "id"], &["providers", "enable", "id", "false"]] {
             assert!(parse(args).is_ok(), "{args:?}");
         }
     }
@@ -334,12 +324,11 @@ mod tests {
     fn command_options_and_literal_tasks() {
         let c = parse(&["--cloud", "exec", "--plan", "--jsonl", "--yes", "--", "--literal-task"]).unwrap();
         assert!(matches!(c.command, Some(Commands::Exec { task, plan: true, jsonl: true, yes: true }) if task == "--literal-task"));
-        assert!(matches!(parse(&["serve", "--port=1234"]).unwrap().command, Some(Commands::Serve { port: 1234, .. })));
         assert!(matches!(parse(&["translate", "a.pdf", "-mfoo", "-t", "English", "-oout.md"]).unwrap().command, Some(Commands::Translate { model, to, out: Some(out), .. }) if model == "foo" && to == "English" && out == PathBuf::from("out.md")));
     }
     #[test]
     fn rejects_malformed_invocations_without_exposing_values() {
-        for args in [&["--unknown"][..], &["--model"], &["--local=true"], &["--local", "--local"], &["exec"], &["exec", "one", "two"], &["serve", "--port", "65536"], &["providers", "enable", "id", "yes"], &["check", "--cloud"], &["context", "--budget=-1"]] {
+        for args in [&["--unknown"][..], &["--model"], &["--local=true"], &["--local", "--local"], &["exec"], &["exec", "one", "two"], &["providers", "enable", "id", "yes"], &["check", "--cloud"], &["context", "--budget=-1"]] {
             assert_eq!(parse(args).unwrap_err().code, 2, "{args:?}");
         }
         assert!(!parse(&["providers", "set", "id", "secret", "other-secret"]).unwrap_err().text.contains("secret"));

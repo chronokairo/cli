@@ -59,8 +59,8 @@ Gap analysis (`docs/gap-analysis-2026-08.md`) against Claude Code, Codex, Antigr
 - CLI flag, `/caveman` command, prompt suffixes, UI display all removed.  
 - Rationale: marginal utility, adds cognitive load, not used by competitors.
 
-**R2. Evaluated `serve` / `terminal`** — **Kept**.  
-- `anamnesic serve` launches a WebSocket + xterm.js web terminal (PTY). Functional feature, not dead code.
+**R2. Removed `serve` / `terminal`.**
+- The browser terminal, PTY bridge, and xterm.js surface were removed; the supported interface is the native Ratatui TUI.
 
 **R3. Froze `bench` / `hw_recommend`** — No new features.  
 - Existing modules remain; no active development planned.

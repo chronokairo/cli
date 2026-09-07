@@ -139,21 +139,14 @@ Key files:
 - Slash commands: /info, /help, /status, /model, /provider, /reset, /resume, /continue
 - Approval modal (a allow once, s allow session, d/Esc deny)
 - File search overlay (Ctrl+P)
-- src/terminal/ — Web-based terminal via WebSocket
-- pty.rs: TerminalSession using portable-pty (ConPTY on Windows)
-- session.rs: TerminalSessionManager (create/get/remove/resize sessions)
-- server.rs: Axum HTTP + WS server, serves xterm.js SPA
-- shell.rs: Platform-aware default shell detection
 - src/main.rs
 - Commands::Tui — launches ui::run_ui()
-- Commands::Serve — launches terminal::server::serve() for browser access
 - Auto-detects TUI mode when stdin/stdout are terminals
 4. Key Entry Points and Main Modules
 Entry Point	Location
 main()	src/main.rs:259
 run_agent_loop()	src/agent/agent_loop.rs
 ui::run_ui()	src/ui/mod.rs
-terminal::server::serve()	src/terminal/server.rs
 repl()	src/main.rs:384
 build_router()	src/main.rs:202
 5. Testing Infrastructure

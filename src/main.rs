@@ -24,7 +24,6 @@ mod protocol;
 mod providers;
 mod repo;
 mod skills;
-mod terminal;
 mod tools;
 mod types;
 mod ui;
@@ -251,13 +250,6 @@ async fn async_main() -> Result<()> {
         }
         Some(Commands::Repl) => {
             repl(&client, &mut state).await?;
-        }
-        Some(Commands::Serve { port, host }) => {
-            let argv = vec![
-                std::env::current_exe()?.to_string_lossy().to_string(),
-                "tui".to_string(),
-            ];
-            terminal::server::serve(&host, port, argv, state.config.workspace_dir.clone()).await?;
         }
         Some(Commands::Exec {
             task,
