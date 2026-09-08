@@ -50,7 +50,7 @@ impl ModelCapabilities {
         }
     }
 
-    /// Build capabilities from a models.dev catalog entry.
+    /// Build capabilities from a provider catalog entry.
     pub fn from_catalog(info: &ModelInfo, fallback_context: usize) -> Self {
         let max_context = if info.limit.context > 0 {
             info.limit.context as usize

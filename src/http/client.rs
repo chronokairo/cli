@@ -395,12 +395,20 @@ pub mod blocking {
             }
         }
 
+        pub fn bearer_auth(mut self, token: impl Into<String>) -> Self {
+            self.headers
+                .insert("Authorization".to_string(), format!("Bearer {}", token.into()));
+            self
+        }
+
         pub fn send(self) -> crate::error::Result<Response> {
             let timeout = self.timeout.unwrap_or(self.client.timeout);
             let mut cmd = std::process::Command::new("curl.exe");
             cmd.arg("-s").arg("-i");
             cmd.arg("-X").arg(&self.method);
             cmd.arg("--max-time").arg(timeout.as_secs().max(1).to_string());
+            cmd.stdout(std::process::Stdio::piped());
+            cmd.stderr(std::process::Stdio::null());
 
             for (k, v) in &self.headers {
                 cmd.arg("-H").arg(format!("{}: {}", k, v));

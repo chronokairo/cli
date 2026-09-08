@@ -44,14 +44,15 @@ pub async fn test_provider(provider_id: &str, entry: &ProviderEntry) -> Result<S
         .unwrap_or_else(|| "OK".into()))
 }
 
-/// Default API base URL per provider (used when store/catalog have none).
+/// Default API base URL per provider. Consults the built-in provider registry
+/// first; unknown ids fall back to a conventional `https://api.<id>.com/v1`.
 pub(crate) fn default_base(provider_id: &str) -> String {
+    if let Some(kp) = crate::providers::catalog::known_provider(provider_id) {
+        return kp.api.to_string();
+    }
     match provider_id {
-        "nvidia" | "deepseek" | "minimax" | "z-ai" | "openai" | "anthropic" | "google"
-        | "mistral" | "groq" | "togetherai" | "cohere" | "openrouter" | "perplexity"
-        | "fireworks-ai" | "deepinfra" | "cerebras" | "ollama-cloud" => {
-            "https://integrate.api.nvidia.com/v1".into()
-        }
+        "ollama-cloud" => "https://ollama.com/v1".into(),
+        "anthropic" => "https://api.anthropic.com/v1".into(),
         other => format!("https://api.{other}.com/v1"),
     }
 }

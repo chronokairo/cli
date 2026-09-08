@@ -34,7 +34,7 @@ pub(crate) enum Commands {
     Repl,
     /// List locally available models
     Models,
-    /// List cloud models from models.dev catalog
+    /// List cloud models discovered from provider APIs
     Cloud {
         /// Filter by name/family/provider (empty = show all)
         query: String,
@@ -92,13 +92,13 @@ pub(crate) enum Commands {
 /// Sub-actions for `rust-agent providers`
 #[derive(Debug)]
 pub(crate) enum ProvidersAction {
-    /// List all providers from the models.dev catalog and their configuration status
+    /// List all providers from the built-in registry and their configuration status
     List,
     /// Show currently configured providers and their (masked) API keys
     Show,
     /// Set an API key for a provider  (e.g. rust-agent providers set openai sk-...)
     Set {
-        /// Provider ID as in models.dev (e.g. openai, anthropic, groq, mistral)
+        /// Provider ID (e.g. openai, anthropic, groq, mistral, nvidia)
         provider: String,
         /// API key — read from stdin if omitted (safer: avoids shell history)
         api_key: Option<String>,
@@ -114,7 +114,7 @@ pub(crate) enum ProvidersAction {
     },
     /// Test connectivity and API key validity for a provider
     Test { provider: String },
-    /// Import API keys from environment variables (reads models.dev env var names)
+    /// Import API keys from environment variables (reads provider env var names)
     Import,
 }
 

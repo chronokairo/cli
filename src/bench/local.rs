@@ -4,7 +4,7 @@ use crate::llm::infer::{
     engine::InferenceEngine, gguf::GgufReader, model::Model, tokenizer::Tokenizer,
 };
 use crate::llm::model_resolver;
-use crate::providers::ModelsDevClient;
+use crate::providers::ProviderCatalog;
 use std::path::Path;
 use std::time::Instant;
 
@@ -92,7 +92,7 @@ pub fn benchmark_model(name: &str, models_dir: &Path) -> BenchResult {
 pub fn rank_models(models_dir: &Path, category: &str) -> Vec<BenchResult> {
     let hw = detector::detect_hardware();
     let hw_recs = recommender::recommend(&hw, category);
-    let cloud = ModelsDevClient::load();
+    let cloud = ProviderCatalog::load();
 
     let available = model_resolver::list_models(models_dir);
     let to_bench: Vec<String> = available

@@ -667,7 +667,7 @@ fn handle_slash_command(
                 } else {
                     let prov = parts[0].to_lowercase();
                     let store = crate::providers::ProviderStore::load();
-                    let catalog_client = crate::providers::ModelsDevClient::load();
+                    let catalog_client = crate::providers::ProviderCatalog::load();
                     let has_key = store.api_key(&prov).is_some()
                         || crate::providers::ProviderStore::resolve_cloud_credentials(&prov, &catalog_client.catalog).is_ok();
                     if has_key {
@@ -968,7 +968,7 @@ fn save_provider_key(provider: &str, key: &str) -> crate::error::Result<()> {
     store.set_key(provider, key);
     store.save()?;
 
-    let catalog_client = crate::providers::ModelsDevClient::load();
+    let catalog_client = crate::providers::ProviderCatalog::load();
     let env_name = catalog_client
         .catalog
         .get(provider)
@@ -985,7 +985,7 @@ fn save_provider_key(provider: &str, key: &str) -> crate::error::Result<()> {
 
 /// Open the provider selector popup with status indicator for configured keys.
 fn open_provider_selector(app: &mut App, filter_query: &str) {
-    let catalog = crate::providers::ModelsDevClient::load();
+    let catalog = crate::providers::ProviderCatalog::load();
     let store = crate::providers::ProviderStore::load();
     let env_detected = crate::providers::ProviderStore::detect_env_keys(&catalog.catalog);
     let env_providers: std::collections::HashSet<String> = env_detected
@@ -1022,7 +1022,7 @@ fn open_provider_selector(app: &mut App, filter_query: &str) {
 
     if provs.is_empty() {
         let msg = if filter_query.is_empty() {
-            "No cloud providers found in the models.dev catalog (offline?).".to_string()
+            "No cloud providers found (offline or none discovered).".to_string()
         } else {
             format!("No provider matches \"{filter_query}\".")
         };
@@ -1059,7 +1059,7 @@ fn open_model_selector(app: &mut App, state: &Arc<Mutex<AgentState>>) {
     drop(st);
 
     let provider = app.provider.clone();
-    let catalog = crate::providers::ModelsDevClient::load();
+    let catalog = crate::providers::ProviderCatalog::load();
     let mut prov_models = catalog.provider_models(&provider);
 
     let cloud_items: Vec<String> = if provider == "nvidia" {
@@ -1130,7 +1130,7 @@ fn open_model_selector(app: &mut App, state: &Arc<Mutex<AgentState>>) {
 }
 
 fn pinned_candidate_models(provider: &str, state: &Arc<Mutex<AgentState>>) -> Vec<String> {
-    let catalog = crate::providers::ModelsDevClient::load();
+    let catalog = crate::providers::ProviderCatalog::load();
     let cloud_candidates: Vec<String> = catalog
         .provider_models(provider)
         .into_iter()
@@ -1321,7 +1321,7 @@ fn set_active_model(
                 app.model = best.clone();
                 app.last_auto_test = Some(record.clone());
                 router.set_model(&best);
-                let catalog = crate::providers::ModelsDevClient::load();
+                let catalog = crate::providers::ProviderCatalog::load();
                 if catalog
                     .provider_model_api_id(&app.provider, &best)
                     .is_some()
@@ -1351,7 +1351,7 @@ fn set_active_model(
             app.model = best.clone();
             app.last_auto_test = Some(rec.clone());
             router.set_model(&best);
-            let catalog = crate::providers::ModelsDevClient::load();
+            let catalog = crate::providers::ProviderCatalog::load();
             if catalog
                 .provider_model_api_id(&app.provider, &best)
                 .is_some()
@@ -1386,7 +1386,7 @@ fn set_active_model(
         // Typed names: resolve against the active provider's catalog so plain
         // cloud ids (e.g. Ollama Cloud "glm-5.2") still route to the cloud.
         let provider = app.provider.clone();
-        let catalog = crate::providers::ModelsDevClient::load();
+        let catalog = crate::providers::ProviderCatalog::load();
         is_cloud = catalog.provider_model_api_id(&provider, &clean).is_some();
     }
     if is_cloud {
@@ -1418,7 +1418,7 @@ fn set_active_model(
 }
 
 /// Set the active cloud provider: rebuilds the router's cloud backend using
-/// the models.dev catalog base URL + the configured/env API key.
+/// the provider's API base URL + the configured/env API key.
 fn set_active_provider(
     app: &mut App,
     _state: &Arc<Mutex<AgentState>>,
@@ -1822,7 +1822,7 @@ pub fn run_ui(client: LlmRouter, state: AgentState) -> Result<(), Box<dyn Error>
                         }
                         a.model = best.clone();
                         client.set_model(&best);
-                        let catalog = crate::providers::ModelsDevClient::load();
+                        let catalog = crate::providers::ProviderCatalog::load();
                         if catalog.provider_model_api_id(&a.provider, &best).is_some() {
                             client.mark_cloud(&best);
                         }
@@ -2161,7 +2161,7 @@ pub fn run_ui(client: LlmRouter, state: AgentState) -> Result<(), Box<dyn Error>
                                 if !name.is_empty() {
                                     let id = name.split(" — ").next().unwrap_or(&name).trim().to_string();
                                     let store = crate::providers::ProviderStore::load();
-                                    let catalog_client = crate::providers::ModelsDevClient::load();
+                                    let catalog_client = crate::providers::ProviderCatalog::load();
                                     let has_key = store.api_key(&id).is_some()
                                         || crate::providers::ProviderStore::resolve_cloud_credentials(&id, &catalog_client.catalog).is_ok();
                                     if has_key {

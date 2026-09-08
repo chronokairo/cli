@@ -3,7 +3,7 @@
 //! Local SLMs cost ~$0 from an API billing standpoint, but that is a policy
 //! input, not a hard fact — the seam below lets a future estimator factor in
 //! GPU time, energy or cloud reserved capacity. Remote models are priced from
-//! the models.dev catalog through [`LlmRouter::estimate_cost`].
+//! the provider catalog through [`LlmRouter::estimate_cost`].
 
 use crate::llm::router::{CostEstimate, LlmRouter};
 
@@ -41,7 +41,7 @@ mod tests {
         // estimator delegates and returns the CostEstimate shape.
         let router = crate::llm::router::LlmRouter::with_catalog(
             crate::llm::client::LlmClient::ollama("http://localhost:11434"),
-            crate::providers::ModelsDevClient {
+            crate::providers::ProviderCatalog {
                 catalog: Default::default(),
             },
         );

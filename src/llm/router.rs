@@ -1,6 +1,6 @@
 use crate::llm::client::{ChatCompletion, LlmClient, ResponseFormat, ToolChoice, ToolDef};
 use crate::llm::tier;
-use crate::providers::{base_id, ModelsDevClient};
+use crate::providers::{base_id, ProviderCatalog};
 use crate::error::{Context, Result};
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex};
@@ -37,11 +37,11 @@ pub struct LlmRouter {
     cloud: Arc<Mutex<Option<LlmClient>>>,
     provider: Arc<Mutex<String>>,
     cloud_models: Arc<Mutex<HashSet<String>>>,
-    catalog: Arc<ModelsDevClient>,
+    catalog: Arc<ProviderCatalog>,
     fallback_model: Arc<Mutex<Option<String>>>,
 }
 
-/// USD cost estimate for a completed LLM call, priced from the models.dev
+/// USD cost estimate for a completed LLM call, priced from the provider
 /// catalog. Defaults to zero for local/free models not present in the catalog.
 #[derive(Debug, Clone, Default)]
 pub struct CostEstimate {
@@ -74,11 +74,11 @@ pub struct AutoTestRecord {
 
 impl LlmRouter {
     pub fn new(local: LlmClient) -> Self {
-        Self::with_catalog(local, ModelsDevClient::load())
+        Self::with_catalog(local, ProviderCatalog::load())
     }
 
     /// Build a router against a specific catalog (used by tests).
-    pub fn with_catalog(local: LlmClient, catalog: ModelsDevClient) -> Self {
+    pub fn with_catalog(local: LlmClient, catalog: ProviderCatalog) -> Self {
         Self {
             local,
             cloud: Arc::new(Mutex::new(None)),
@@ -92,7 +92,7 @@ impl LlmRouter {
     /// Build a router with a fake cloud client, used by tests that need a
     /// configured remote backend without a real provider/API key.
     #[cfg(test)]
-    pub fn with_cloud_for_test(local: LlmClient, catalog: ModelsDevClient) -> Self {
+    pub fn with_cloud_for_test(local: LlmClient, catalog: ProviderCatalog) -> Self {
         let router = Self::with_catalog(local, catalog);
         *router.cloud.lock().unwrap() =
             Some(LlmClient::cloud("https://fake.invalid/v1", "test-key"));
@@ -104,17 +104,17 @@ impl LlmRouter {
         self.provider.lock().unwrap().clone()
     }
 
-    /// Read-only access to the models.dev catalog, used by the task router to
+    /// Read-only access to the provider catalog, used by the task router to
     /// resolve model capabilities and context windows per candidate.
-    pub fn catalog_client(&self) -> &ModelsDevClient {
+    pub fn catalog_client(&self) -> &ProviderCatalog {
         &self.catalog
     }
 
-    /// Build (or rebuild) the cloud backend for `provider` from the models.dev
-    /// catalog default base URL + the configured/env API key.  Returns the API
+    /// Build (or rebuild) the cloud backend for `provider` from the provider's
+    /// API base URL + the configured/env API key.  Returns the API
     /// base URL on success.
     pub fn set_provider(&self, provider: &str) -> Result<String> {
-        let catalog_client = crate::providers::ModelsDevClient::load();
+        let catalog_client = crate::providers::ProviderCatalog::load();
         let (base, key) = crate::providers::ProviderStore::resolve_cloud_credentials(
             provider,
             &catalog_client.catalog,
@@ -191,7 +191,7 @@ impl LlmRouter {
         stored.filter(|fb| fb != model)
     }
 
-    /// Estimate the USD cost of a completed call for `model` using models.dev
+    /// Estimate the USD cost of a completed call for `model` using provider
     /// catalog prices ($ per million tokens). Prefers the active provider's
     /// listing; falls back to any provider matching the base id. Local/free
     /// models not in the catalog price at zero.
@@ -588,7 +588,7 @@ mod tests {
     fn router() -> LlmRouter {
         LlmRouter::with_catalog(
             LlmClient::ollama("http://localhost:11434"),
-            ModelsDevClient {
+            ProviderCatalog {
                 catalog: test_catalog(),
             },
         )
@@ -668,7 +668,7 @@ mod tests {
         catalog.insert("nvidia".into(), provider("nvidia", vec![model]));
         let r = LlmRouter::with_catalog(
             LlmClient::ollama("http://localhost:11434"),
-            ModelsDevClient { catalog },
+            ProviderCatalog { catalog },
         );
         // 2M prompt @ $0.50/MTok + 1M completion @ $1.00/MTok.
         let cost = r.estimate_cost("glm-5.2", 2_000_000, 1_000_000);

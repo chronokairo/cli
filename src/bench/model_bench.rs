@@ -10,7 +10,7 @@ use crate::llm::infer::{
 };
 use crate::llm::model_resolver;
 use crate::llm::provider_chain::FallbackChain;
-use crate::providers::{CloudMatch, ModelsDevClient};
+use crate::providers::{CloudMatch, ProviderCatalog};
 
 const BENCH_PROMPT: &str = "Write a Python function that computes fibonacci numbers.";
 const BENCH_TOKENS: usize = 20; // enough to measure TPS without hanging for minutes
@@ -34,7 +34,7 @@ pub struct BenchResult {
     pub hw_rank: Option<usize>,
     pub output_sample: String,
     pub error: Option<String>,
-    /// Nearest cloud equivalent from models.dev.
+    /// Nearest cloud equivalent from the provider catalog.
     pub cloud_match: Option<CloudMatch>,
 }
 
@@ -120,8 +120,8 @@ pub fn rank_models(models_dir: &Path, category: &str) -> Vec<BenchResult> {
     let hw = detector::detect_hardware();
     let hw_recs = recommender::recommend(&hw, category);
 
-    // Load models.dev catalog (uses cache; gracefully empty if offline)
-    let cloud = ModelsDevClient::load();
+    // Load provider model catalog (uses cache; gracefully empty if offline/undiscovered)
+    let cloud = ProviderCatalog::load();
 
     let available = model_resolver::list_models(models_dir);
     let to_bench: Vec<String> = available
@@ -161,7 +161,7 @@ pub fn rank_models(models_dir: &Path, category: &str) -> Vec<BenchResult> {
                 r.predicted_tps = Some(estimate_tps_from_catalog(&hw, &rec.model, category));
                 r.hw_rank = Some(rank + 1);
             }
-            // Attach nearest cloud equivalent from models.dev
+            // Attach nearest cloud equivalent from the provider catalog
             r.cloud_match = cloud.match_local(name);
             r
         })

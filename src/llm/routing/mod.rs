@@ -16,7 +16,7 @@
 //! interfaces without rewriting the policy or the decision shape.
 //!
 //! The router reuses the existing abstractions (`LlmRouter`, `LlmClient`,
-//! `ModelsDevClient` catalog, model tiers) — it does not introduce a parallel
+//! `ProviderCatalog`, model tiers) — it does not introduce a parallel
 //! provider layer.
 
 pub mod capabilities;
@@ -196,7 +196,7 @@ impl RoutingDecision {
 }
 
 /// The router. Cheap, deterministic, and provider-agnostic: it works against
-/// `LlmRouter` + the models.dev catalog, never against a specific provider.
+/// `LlmRouter` + the provider catalog, never against a specific provider.
 pub struct TaskRouter<'a> {
     llm: &'a LlmRouter,
     policy: &'a RoutingPolicy,
@@ -807,7 +807,7 @@ mod tests {
     use crate::llm::client::LlmClient;
     use crate::llm::router::LlmRouter;
     use crate::providers::types::{Catalog, Cost, Limits, Modalities, ModelInfo, Provider};
-    use crate::providers::ModelsDevClient;
+    use crate::providers::ProviderCatalog;
 
     fn model(id: &str, tool: bool, reasoning: bool) -> ModelInfo {
         ModelInfo {
@@ -859,7 +859,7 @@ mod tests {
 
     fn router(cloud: bool) -> LlmRouter {
         let local = LlmClient::ollama("http://localhost:11434");
-        let client = ModelsDevClient {
+        let client = ProviderCatalog {
             catalog: test_catalog(),
         };
         if cloud {

@@ -130,7 +130,7 @@ pub fn classify_model_tier_from_info(model_id: &str, info: Option<&ModelInfo>) -
 pub fn find_same_tier_fallback(
     model_id: &str,
     provider: &str,
-    catalog: &crate::providers::ModelsDevClient,
+    catalog: &crate::providers::ProviderCatalog,
 ) -> Option<String> {
     let primary_base = crate::providers::base_id(model_id);
     let tier = classify_model_tier(&primary_base);
@@ -242,7 +242,7 @@ mod tests {
         assert!(ModelTier::Smart < ModelTier::Intelligent);
     }
 
-    fn test_catalog_with_multiple_tiers() -> crate::providers::ModelsDevClient {
+    fn test_catalog_with_multiple_tiers() -> crate::providers::ProviderCatalog {
         use crate::providers::types::{Cost, Limits, Modalities, ModelInfo, Provider};
         use std::collections::HashMap;
 
@@ -300,7 +300,7 @@ mod tests {
         let mut catalog = HashMap::new();
         catalog.insert("nvidia".into(), nvidia);
 
-        crate::providers::ModelsDevClient { catalog }
+        crate::providers::ProviderCatalog { catalog }
     }
 
     #[test]

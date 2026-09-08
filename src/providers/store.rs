@@ -22,7 +22,7 @@ fn default_true() -> bool {
     true
 }
 
-/// All configured providers, keyed by provider_id matching models.dev.
+/// All configured providers, keyed by provider_id (e.g. `nvidia`, `groq`).
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct ProviderStore {
     #[serde(flatten)]
@@ -162,8 +162,8 @@ impl ProviderStore {
     }
 
     /// Scan the current environment (plus an optional .env file) for known
-    /// provider API key vars (from the models.dev catalog) and return those
-    /// found but not yet configured in the store.
+    /// provider API key vars (from the built-in provider registry) and return
+    /// those found but not yet configured in the store.
     pub fn detect_env_keys(catalog: &Catalog) -> Vec<(String, String, String)> {
         // Build a merged map: real env vars + .env file (env takes precedence)
         let env_map = load_env_with_dotenv();
@@ -210,7 +210,7 @@ impl ProviderStore {
 
     /// Resolve cloud endpoint + API key for a provider.
     ///
-    /// Base URL priority: store override → models.dev catalog default → built-in default.
+    /// Base URL priority: store override → built-in registry default → fallback.
     /// Key priority: store key → global settings / environment / `.env` (e.g. `NVIDIA_API_KEY`).
     pub fn resolve_cloud_credentials(
         provider_id: &str,
@@ -252,7 +252,7 @@ fn config_path() -> Result<PathBuf> {
 
 /// Build a merged env-var map: real process environment → global settings
 /// (`~/.anamnesic/settings.json`) → `.env` file (earlier sources win).
-fn load_env_with_dotenv() -> HashMap<String, String> {
+pub(crate) fn load_env_with_dotenv() -> HashMap<String, String> {
     let mut map: HashMap<String, String> = std::env::vars().collect();
 
     // Global settings (`~/.anamnesic/settings.json`): process env wins.

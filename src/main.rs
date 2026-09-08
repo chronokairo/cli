@@ -202,7 +202,7 @@ async fn async_main() -> Result<()> {
     match cli.command {
         Some(Commands::Check) => hw_check().await?,
         Some(Commands::Cloud { query }) => {
-            let catalog = providers::ModelsDevClient::load();
+            let catalog = providers::ProviderCatalog::load();
             catalog.print_list(&query);
         }
         Some(Commands::Providers { action }) => {
@@ -582,7 +582,7 @@ fn get_cloud_models() -> Vec<(String, String, String, String, f64)> {
 
 async fn handle_providers(action: ProvidersAction) -> Result<()> {
     use providers::{print_store, test_provider, ProviderEntry, ProviderStore};
-    let catalog_client = crate::async_rt::task::spawn_blocking(providers::ModelsDevClient::load)
+    let catalog_client = crate::async_rt::task::spawn_blocking(providers::ProviderCatalog::load)
         .await
         .map_err(|_| crate::error::message("failed to load catalog"))?;
     let catalog = &catalog_client.catalog;
@@ -591,7 +591,7 @@ async fn handle_providers(action: ProvidersAction) -> Result<()> {
         ProvidersAction::List => {
             let mut ids: Vec<&str> = catalog.keys().map(|s| s.as_str()).collect();
             ids.sort();
-            println!("\n  Available providers from models.dev catalog");
+            println!("\n  Available providers (from provider APIs)");
             println!("{}", "─".repeat(80));
             println!(
                 "  {:<20} {:<40} {:<15}",
