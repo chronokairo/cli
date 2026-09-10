@@ -501,6 +501,17 @@ impl InferenceEngine {
         self.generate_inner(prompt, max_tokens, temperature, top_k, false)
     }
 
+    /// Interactive generation with streaming to stdout. Returns (output_text, tokens_generated).
+    pub fn generate_interactive(
+        &mut self,
+        prompt: &str,
+        max_tokens: usize,
+        temperature: f32,
+        top_k: usize,
+    ) -> Result<(String, usize)> {
+        self.generate_inner(prompt, max_tokens, temperature, top_k, true)
+    }
+
     fn generate_inner(
         &mut self,
         prompt: &str,

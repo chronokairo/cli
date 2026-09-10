@@ -41,6 +41,26 @@ pub(crate) enum Commands {
         /// Model name (e.g. qwen2.5-coder:3b, nemotron-mini:4b) or Hugging Face URL
         model: String,
     },
+    /// Remove/delete a local model and its aliases from ~/.chronokairo/models
+    Rm {
+        model: String,
+    },
+    /// Show detailed metadata and architecture info for a local GGUF model
+    Show {
+        model: String,
+    },
+    /// Copy or create an alias for a local model
+    Cp {
+        source: String,
+        target: String,
+    },
+    /// Show system hardware, VRAM, and model runtime status
+    Ps,
+    /// Run direct local inference or interactive chat
+    Run {
+        model: String,
+        prompt: Option<String>,
+    },
     /// List cloud models discovered from provider APIs
     Cloud {
         /// Filter by name/family/provider (empty = show all)
@@ -142,7 +162,11 @@ const ROOT: &[(&str, &str, bool)] = &[
     ("cloud-model", "", true), ("resume", "", false), ("cont", "", false),
     ("download-embedding-model", "", false),
 ];
-const COMMANDS: &[&str] = &["check", "tui", "repl", "models", "pull", "cloud", "providers", "bench", "exec", "app-server", "mcp-server", "translate", "context"];
+const COMMANDS: &[&str] = &[
+    "check", "tui", "repl", "models", "pull", "rm", "remove", "show", "inspect",
+    "cp", "copy", "ps", "run", "cloud", "providers", "bench", "exec", "app-server",
+    "mcp-server", "translate", "context",
+];
 
 #[derive(Default)]
 struct Options {
@@ -179,8 +203,13 @@ fn utf8(value: OsString, label: &str) -> Parsed<String> {
 }
 fn help(command: &str) -> String {
     let usage = match command {
-        "" => "[OPTIONS] [TASK] [COMMAND]\n\nCommands:\n  check  tui  repl  models  pull  cloud  providers  bench\n  exec   app-server  mcp-server  translate  context\n\nOptions:\n  --local  --gpu  --no-gpu (alias: --cpu)  --model <MODEL>  -d, --dir <DIR> [default: .]\n  --cloud  --provider <ID>  --cloud-model <MODEL>\n  --resume  --cont (alias: --continue)  --download-embedding-model",
+        "" => "[OPTIONS] [TASK] [COMMAND]\n\nCommands:\n  check  tui  repl  models  pull  rm  show  cp  ps  run\n  cloud  providers  bench  exec  app-server  mcp-server  translate  context\n\nOptions:\n  --local  --gpu  --no-gpu (alias: --cpu)  --model <MODEL>  -d, --dir <DIR> [default: .]\n  --cloud  --provider <ID>  --cloud-model <MODEL>\n  --resume  --cont (alias: --continue)  --download-embedding-model",
         "pull" => "<MODEL>\nDownload a model into ~/.chronokairo/models\nExamples:\n  ckc pull qwen2.5-coder:3b\n  ckc pull nemotron-mini:4b\n  ckc pull ministral:3b\n  ckc pull phi-4-mini:3.8b\n  ckc pull https://huggingface.co/.../model.gguf",
+        "rm" | "remove" => "<MODEL>\nDelete a local model and its aliases from ~/.chronokairo/models\nExamples:\n  ckc rm qwen2.5-coder:3b",
+        "show" | "inspect" => "<MODEL>\nShow detailed metadata for a local GGUF model\nExamples:\n  ckc show qwen2.5-coder:3b",
+        "cp" | "copy" => "<SOURCE> <TARGET>\nCreate an alias for a local model\nExamples:\n  ckc cp qwen2.5-coder:3b coder",
+        "ps" => "\nShow system hardware, VRAM, and model runtime status",
+        "run" => "<MODEL> [PROMPT]\nRun direct local inference or interactive chat\nExamples:\n  ckc run qwen2.5-coder:3b \"Write a quicksort in Rust\"\n  ckc run qwen2.5-coder:3b",
         "cloud" => "[QUERY]",
         "providers" => "<COMMAND>\nCommands: list, show, set, remove, enable, test, import",
         "providers set" => "<PROVIDER> [API_KEY] [--base <URL>]\nReads a hidden key from stdin when API_KEY is omitted.",
@@ -291,6 +320,19 @@ fn parse_command(command: &str, args: &mut VecDeque<OsString>) -> Parsed<Command
     let parsed = match command {
         "check" => Commands::Check, "tui" => Commands::Tui, "repl" => Commands::Repl,
         "models" => Commands::Models, "pull" => Commands::Pull { model: o.text("MODEL")? },
+        "rm" | "remove" => Commands::Rm { model: o.text("MODEL")? },
+        "show" | "inspect" => Commands::Show { model: o.text("MODEL")? },
+        "cp" | "copy" => Commands::Cp { source: o.text("SOURCE")?, target: o.text("TARGET")? },
+        "ps" => Commands::Ps,
+        "run" => {
+            let model = o.text("MODEL")?;
+            let mut words = Vec::new();
+            while let Some(w) = o.optional_text("PROMPT")? {
+                words.push(w);
+            }
+            let prompt = if words.is_empty() { None } else { Some(words.join(" ")) };
+            Commands::Run { model, prompt }
+        }
         "app-server" => Commands::AppServer, "mcp-server" => Commands::McpServer,
         "cloud" => Commands::Cloud { query: o.optional_text("QUERY")?.unwrap_or_default() },
         "bench" => Commands::Bench { category: o.value_or("category", "coding")?, output: o.value_or("output", "bench_results.json")?, cloud: o.flag("cloud") },
@@ -333,7 +375,16 @@ mod tests {
     }
     #[test]
     fn every_command_parses() {
-        for args in [&["check"][..], &["tui"], &["repl"], &["models"], &["pull", "qwen2.5-coder:3b"], &["cloud"], &["bench"], &["exec", "task"], &["app-server"], &["mcp-server"], &["translate", "a.pdf"], &["context"], &["providers", "list"], &["providers", "show"], &["providers", "import"], &["providers", "remove", "id"], &["providers", "test", "id"], &["providers", "set", "id"], &["providers", "enable", "id", "false"]] {
+        for args in [
+            &["check"][..], &["tui"], &["repl"], &["models"], &["pull", "qwen2.5-coder:3b"],
+            &["rm", "qwen2.5-coder:3b"], &["remove", "m"], &["show", "qwen2.5-coder:3b"],
+            &["inspect", "m"], &["cp", "a", "b"], &["copy", "a", "b"], &["ps"],
+            &["run", "m"], &["run", "m", "hello", "world"],
+            &["cloud"], &["bench"], &["exec", "task"], &["app-server"], &["mcp-server"],
+            &["translate", "a.pdf"], &["context"], &["providers", "list"], &["providers", "show"],
+            &["providers", "import"], &["providers", "remove", "id"], &["providers", "test", "id"],
+            &["providers", "set", "id"], &["providers", "enable", "id", "false"]
+        ] {
             assert!(parse(args).is_ok(), "{args:?}");
         }
     }

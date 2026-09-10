@@ -1,6 +1,7 @@
 pub mod client;
 pub mod embedder;
 pub mod infer;
+pub mod manage;
 pub mod model_resolver;
 pub mod prompt;
 pub mod provider_chain;

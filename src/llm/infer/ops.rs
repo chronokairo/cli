@@ -8,7 +8,7 @@ pub fn init_thread_pool() {
     let workers = worker_count();
     crate::cki_info!("CPU matrix worker limit: {workers}");
 }
-fn worker_count() -> usize {
+pub fn worker_count() -> usize {
     *WORKERS.get_or_init(|| (std::thread::available_parallelism().map_or(2, |n| n.get()) / 2).max(1))
 }
 

@@ -132,18 +132,35 @@ Download the default GGUF embedding model (`Qwen3-Embedding 0.6B Q8`) for local 
 ckc --download-embedding-model
 ```
 
-### Local GGUF Models (`ckc pull` & `--local`)
+### Local GGUF Model Lifecycle (`pull`, `models`, `run`, `show`, `cp`, `rm`, `ps`)
 
-Download verified GGUF models directly from Hugging Face into `~/.chronokairo/models/` for 100% offline, zero-lib agent execution:
+Manage and run verified GGUF models directly in `~/.chronokairo/models/` with zero external daemons or libraries:
+
 ```bash
-# Pull verified coding SLM for edge hardware (e.g. GTX 1650 4GB VRAM)
+# 1. Pull verified SLMs for edge hardware (GTX 1650 4GB VRAM)
 ckc pull qwen2.5-coder:3b
 
-# Run entirely locally on GPU (or CPU with --no-gpu)
-ckc --local --model qwen2.5-coder:3b
-
-# List downloaded and detected local models
+# 2. List downloaded models with size, format, and quantization
 ckc models
+
+# 3. Inspect model architecture, layers, parameters, and VRAM fit
+ckc show qwen2.5-coder:3b
+
+# 4. Create lightweight, zero-copy alias
+ckc cp qwen2.5-coder:3b coder
+
+# 5. Direct inference or interactive streaming chat (without agent tools)
+ckc run coder "Write a binary search algorithm in Rust"
+ckc run coder
+
+# 6. Check system hardware, GPU/OpenCL readiness, CPU workers, and VRAM utilization
+ckc ps
+
+# 7. Delete model and associated aliases to reclaim disk space
+ckc rm coder
+
+# 8. Full autonomous agent loop with local inference
+ckc --local --model qwen2.5-coder:3b
 ```
 
 ### Provider Configuration
@@ -213,3 +230,4 @@ Detailed architectural decision records are maintained in [`docs/adr/`](docs/adr
 - `0016–0019`: Vision gap analysis, specification-locked execution, versioned H-battery, provider-native model catalog.
 - `0020`: Rebranding to ChronoKairo and `ckc` binary transition with backward compatibility fallbacks.
 - `0021`: Local GGUF model pulling and resolution (`ckc pull`).
+- `0022`: Local GGUF model lifecycle management (`rm`, `show`, `cp`, `ps`, `run`).

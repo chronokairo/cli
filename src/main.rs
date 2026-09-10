@@ -199,9 +199,19 @@ async fn async_main() -> Result<()> {
         return Ok(());
     }
 
-    if let Some(Commands::Pull { model }) = &cli.command {
-        crate::llm::pull::pull_model(model)?;
-        return Ok(());
+    match &cli.command {
+        Some(Commands::Pull { model }) => return crate::llm::pull::pull_model(model).map(|_| ()),
+        Some(Commands::Rm { model }) => return crate::llm::manage::rm_model(model),
+        Some(Commands::Show { model }) => return crate::llm::manage::show_model(model),
+        Some(Commands::Cp { source, target }) => return crate::llm::manage::cp_model(source, target),
+        Some(Commands::Ps) => return crate::llm::manage::ps_status(),
+        Some(Commands::Run { model, prompt }) => {
+            return crate::llm::manage::run_direct(model, prompt.as_deref(), cli.no_gpu);
+        }
+        Some(Commands::Models) => {
+            return crate::llm::manage::list_models_detailed(&cfg.models_dir);
+        }
+        _ => {}
     }
 
     let client = build_router(&cli, &mut cfg).await?;
@@ -234,17 +244,7 @@ async fn async_main() -> Result<()> {
                 bench::display::show_ranking_table(&cloud_results)?;
             }
         }
-        Some(Commands::Models) => {
-            let models = model_resolver::list_models(&state.config.models_dir);
-            if models.is_empty() {
-                println!("No models found in {}", state.config.models_dir.display());
-            } else {
-                println!("Available models:");
-                for m in models {
-                    println!("  {}", m);
-                }
-            }
-        }
+        Some(Commands::Models) => unreachable!(),
         Some(Commands::Tui) => {
             // TUI defaults to the GLM-5.2 cloud model when no explicit --cloud
             // flag was given and the nvidia provider is available.
@@ -309,6 +309,11 @@ async fn async_main() -> Result<()> {
         }
         Some(Commands::Context { .. }) => unreachable!(),
         Some(Commands::Pull { .. }) => unreachable!(),
+        Some(Commands::Rm { .. }) => unreachable!(),
+        Some(Commands::Show { .. }) => unreachable!(),
+        Some(Commands::Cp { .. }) => unreachable!(),
+        Some(Commands::Ps) => unreachable!(),
+        Some(Commands::Run { .. }) => unreachable!(),
         None => {
             if let Some(task) = cli.task {
                 run_agent_loop(&client, &mut state, &task).await;
