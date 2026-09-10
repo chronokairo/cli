@@ -134,24 +134,24 @@ ckc --download-embedding-model
 
 ### Local GGUF Model Lifecycle (`pull`, `models`, `run`, `show`, `cp`, `rm`, `ps`)
 
-Manage and run verified GGUF models directly in `~/.chronokairo/models/` with zero external daemons or libraries:
+ChronoKairo operates **100% locally and zero-lib by default**. It natively discovers models stored in `~/.chronokairo/models/` as well as any existing models in Ollama (`~/.ollama/models`, `OLLAMA_MODELS`, `%LOCALAPPDATA%\Ollama\models`) without requiring background daemons:
 
 ```bash
-# 1. Pull verified SLMs for edge hardware (GTX 1650 4GB VRAM)
+# 1. Pull verified SLMs for edge hardware (e.g. GTX 1650 4GB VRAM)
 ckc pull qwen2.5-coder:3b
 
-# 2. List downloaded models with size, format, and quantization
+# 2. List all local and Ollama models with size, format, and source
 ckc models
 
-# 3. Inspect model architecture, layers, parameters, and VRAM fit
-ckc show qwen2.5-coder:3b
+# 3. Inspect model architecture, layers, parameters, and VRAM fit (works with Ollama blobs too!)
+ckc show qwen3.5:2b
 
 # 4. Create lightweight, zero-copy alias
 ckc cp qwen2.5-coder:3b coder
 
 # 5. Direct inference or interactive streaming chat (without agent tools)
-ckc run coder "Write a binary search algorithm in Rust"
-ckc run coder
+ckc run qwen3.5:2b "Write a binary search algorithm in Rust"
+ckc run qwen3.5:2b
 
 # 6. Check system hardware, GPU/OpenCL readiness, CPU workers, and VRAM utilization
 ckc ps
@@ -159,8 +159,9 @@ ckc ps
 # 7. Delete model and associated aliases to reclaim disk space
 ckc rm coder
 
-# 8. Full autonomous agent loop with local inference
-ckc --local --model qwen2.5-coder:3b
+# 8. Launch full autonomous agent loop (defaults to local execution automatically!)
+ckc
+ckc "Refactor error handling in src/llm"
 ```
 
 ### Provider Configuration

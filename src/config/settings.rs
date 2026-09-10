@@ -207,7 +207,7 @@ impl Default for Config {
             path_allowlist: env_list("PATH_ALLOWLIST"),
             path_denylist: env_list("PATH_DENYLIST"),
             block_workspace_escape: env_bool("BLOCK_WORKSPACE_ESCAPE", true),
-            use_local: false,
+            use_local: true,
             models_dir: std::env::var("MODELS_DIR")
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| PathBuf::from("models")),

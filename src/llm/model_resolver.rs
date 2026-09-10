@@ -75,7 +75,22 @@ pub fn list_models_in_root(root: &Path) -> Vec<String> {
             if let Ok(tags) = std::fs::read_dir(&model_path) {
                 for tag_entry in tags.flatten() {
                     let tag = tag_entry.file_name().to_string_lossy().to_string();
-                    models.push(format!("{}:{}", model_name, tag));
+                    let tag_path = tag_entry.path();
+                    // Verify that the model blob actually exists on disk
+                    if let Ok(data) = std::fs::read(&tag_path) {
+                        if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&data) {
+                            if let Some(layers) = val["layers"].as_array() {
+                                if let Some(model_layer) = layers.iter().find(|l| l["mediaType"].as_str().is_some_and(|m| m.contains("model"))) {
+                                    if let Some(digest) = model_layer["digest"].as_str() {
+                                        let clean_digest = digest.replace("sha256:", "sha256-");
+                                        if root.join("blobs").join(&clean_digest).is_file() {
+                                            models.push(format!("{}:{}", model_name, tag));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -85,7 +100,7 @@ pub fn list_models_in_root(root: &Path) -> Vec<String> {
     models
 }
 
-fn candidate_roots(models_dir: &Path) -> Vec<PathBuf> {
+pub fn candidate_roots(models_dir: &Path) -> Vec<PathBuf> {
     let mut roots = vec![models_dir.to_path_buf()];
 
     let chrono_models = crate::llm::pull::models_dir();
@@ -98,16 +113,34 @@ fn candidate_roots(models_dir: &Path) -> Vec<PathBuf> {
         roots.push(legacy_models);
     }
 
-    let system = PathBuf::from("/usr/share/ollama/.ollama/models");
-    if !roots.contains(&system) && system.exists() {
-        roots.push(system);
+    // 1. OLLAMA_MODELS environment variable
+    if let Some(ollama_env) = std::env::var_os("OLLAMA_MODELS") {
+        let p = PathBuf::from(ollama_env);
+        if !roots.contains(&p) && p.exists() {
+            roots.push(p);
+        }
     }
 
+    // 2. User home ~/.ollama/models
     if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
         let user = PathBuf::from(home).join(".ollama").join("models");
         if !roots.contains(&user) && user.exists() {
             roots.push(user);
         }
+    }
+
+    // 3. Windows %LOCALAPPDATA%\Ollama\models
+    if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
+        let p = PathBuf::from(local_app_data).join("Ollama").join("models");
+        if !roots.contains(&p) && p.exists() {
+            roots.push(p);
+        }
+    }
+
+    // 4. Linux system /usr/share/ollama/.ollama/models
+    let system = PathBuf::from("/usr/share/ollama/.ollama/models");
+    if !roots.contains(&system) && system.exists() {
+        roots.push(system);
     }
 
     roots
@@ -175,12 +208,29 @@ fn try_resolve(name: &str, root: &Path) -> Option<PathBuf> {
     // 5. Ollama manifests
     let (model_name, tag) = name.split_once(':').unwrap_or((name, "latest"));
 
-    let manifest_path = root
+    let manifest_dir = root
         .join("manifests")
         .join("registry.ollama.ai")
         .join("library")
-        .join(model_name)
-        .join(tag);
+        .join(model_name);
+
+    let manifest_path = if manifest_dir.join(tag).is_file() {
+        manifest_dir.join(tag)
+    } else if tag == "latest" && manifest_dir.is_dir() {
+        // Fallback to first available tag in this model's manifest directory
+        if let Ok(entries) = std::fs::read_dir(&manifest_dir) {
+            entries
+                .flatten()
+                .filter(|e| e.path().is_file())
+                .map(|e| e.path())
+                .next()
+                .unwrap_or_else(|| manifest_dir.join(tag))
+        } else {
+            manifest_dir.join(tag)
+        }
+    } else {
+        manifest_dir.join(tag)
+    };
 
     let data = std::fs::read(&manifest_path).ok()?;
     let manifest: serde_json::Value = serde_json::from_slice(&data).ok()?;

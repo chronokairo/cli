@@ -334,35 +334,22 @@ pub fn run_direct(query: &str, prompt: Option<&str>, no_gpu: bool) -> Result<()>
     Ok(())
 }
 
-/// Enhanced detailed list of available models
+/// Enhanced detailed list of available models (including Ollama models)
 pub fn list_models_detailed(models_dir: &Path) -> Result<()> {
     let mut entries_found = Vec::new();
-
-    let roots = vec![
-        models_dir.to_path_buf(),
-        crate::llm::pull::models_dir(),
-    ];
+    let roots = model_resolver::candidate_roots(models_dir);
 
     for root in roots {
         if !root.exists() {
             continue;
         }
+        // 1. Direct .gguf files
         if let Ok(entries) = std::fs::read_dir(&root) {
             for entry in entries.flatten() {
                 let p = entry.path();
                 if p.is_file() && p.extension().is_some_and(|e| e.eq_ignore_ascii_case("gguf")) {
                     let fname = p.file_name().unwrap_or_default().to_string_lossy().to_string();
                     let size_gb = p.metadata().map(|m| m.len() as f64 / (1024.0 * 1024.0 * 1024.0)).unwrap_or(0.0);
-                    let modified = p.metadata().and_then(|m| m.modified()).ok();
-                    let date_str = modified
-                        .and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok())
-                        .map(|d| {
-                            let secs = d.as_secs();
-                            let days = secs / 86400;
-                            format!("{}d ago", (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() / 86400).saturating_sub(days))
-                        })
-                        .unwrap_or_else(|| "recently".to_string());
-
                     let (name, quant) = if let Some(tm) = crate::llm::pull::TRUSTED_MODELS.iter().find(|tm| tm.filename.eq_ignore_ascii_case(&fname)) {
                         (tm.name.to_string(), "Q4_K_M")
                     } else {
@@ -377,30 +364,61 @@ pub fn list_models_detailed(models_dir: &Path) -> Result<()> {
                         };
                         (fname.clone(), q)
                     };
-                    entries_found.push((name, fname, format!("{:.2} GB", size_gb), quant.to_string(), date_str));
+                    entries_found.push((name, fname, format!("{:.2} GB", size_gb), quant.to_string(), "Local".to_string()));
+                }
+            }
+        }
+
+        // 2. Ollama manifests
+        let manifests_root = root
+            .join("manifests")
+            .join("registry.ollama.ai")
+            .join("library");
+        if let Ok(entries) = std::fs::read_dir(&manifests_root) {
+            for entry in entries.flatten() {
+                let model_name = entry.file_name().to_string_lossy().to_string();
+                let model_path = entry.path();
+                if let Ok(tags) = std::fs::read_dir(&model_path) {
+                    for tag_entry in tags.flatten() {
+                        let tag = tag_entry.file_name().to_string_lossy().to_string();
+                        let tag_path = tag_entry.path();
+                        if let Ok(data) = std::fs::read(&tag_path) {
+                            if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&data) {
+                                if let Some(layers) = val["layers"].as_array() {
+                                    if let Some(model_layer) = layers.iter().find(|l| l["mediaType"].as_str().is_some_and(|m| m.contains("model"))) {
+                                        if let Some(digest) = model_layer["digest"].as_str() {
+                                            let clean_digest = digest.replace("sha256:", "sha256-");
+                                            let blob_path = root.join("blobs").join(&clean_digest);
+                                            if blob_path.is_file() {
+                                                let size_gb = blob_path.metadata().map(|m| m.len() as f64 / (1024.0 * 1024.0 * 1024.0)).unwrap_or(0.0);
+                                                let name = format!("{model_name}:{tag}");
+                                                let fname = format!("sha256:{}...", &clean_digest.strip_prefix("sha256-").unwrap_or(&clean_digest)[..12]);
+                                                entries_found.push((name, fname, format!("{:.2} GB", size_gb), "Ollama (GGUF)".to_string(), "Ollama".to_string()));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
     }
 
     entries_found.sort_by(|a, b| a.0.cmp(&b.0));
-    entries_found.dedup_by(|a, b| a.1 == b.1);
+    entries_found.dedup_by(|a, b| a.0 == b.0);
 
     if entries_found.is_empty() {
-        println!("No local models found in ~/.chronokairo/models");
+        println!("No local models found in ~/.chronokairo/models or ~/.ollama/models");
         println!("Tip: run 'ckc pull qwen2.5-coder:3b' to download a verified model.");
         return Ok(());
     }
 
-    println!("{:<24} {:<40} {:<10} {:<10} {:<12}", "NAME", "FILENAME", "SIZE", "QUANT", "MODIFIED");
-    println!("{:<24} {:<40} {:<10} {:<10} {:<12}", "----", "--------", "----", "-----", "--------");
-    for (name, fname, size, quant, mod_str) in entries_found {
-        let display_fname = if fname.len() > 38 {
-            format!("{}...", &fname[..35])
-        } else {
-            fname
-        };
-        println!("{:<24} {:<40} {:<10} {:<10} {:<12}", name, display_fname, size, quant, mod_str);
+    println!("{:<24} {:<24} {:<10} {:<16} {:<10}", "NAME", "ID / BLOB", "SIZE", "FORMAT", "SOURCE");
+    println!("{:<24} {:<24} {:<10} {:<16} {:<10}", "----", "---------", "----", "------", "------");
+    for (name, fname, size, quant, source) in entries_found {
+        println!("{:<24} {:<24} {:<10} {:<16} {:<10}", name, fname, size, quant, source);
     }
     println!();
     Ok(())

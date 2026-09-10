@@ -65,9 +65,22 @@ async fn build_router(cli: &Cli, cfg: &mut Config) -> Result<LlmRouter> {
         cfg.planner_model = m.clone();
         cfg.summarizer_model = m.clone();
     }
-    let local = if cfg.use_local {
-        let model_name = cli.model.as_deref().unwrap_or("gemma3:1b");
-        let blob_path = model_resolver::resolve_model(model_name, &cfg.models_dir)?;
+    let local = if !cli.cloud {
+        let model_name = if let Some(ref m) = cli.model {
+            m.clone()
+        } else {
+            let available = model_resolver::list_models(&cfg.models_dir);
+            if let Some(first) = available.into_iter().next() {
+                eprintln!("No --model specified; auto-detected local model: '{first}'");
+                cfg.coder_model = first.clone();
+                cfg.planner_model = first.clone();
+                cfg.summarizer_model = first.clone();
+                first
+            } else {
+                "qwen2.5-coder:3b".to_string()
+            }
+        };
+        let blob_path = model_resolver::resolve_model(&model_name, &cfg.models_dir)?;
         eprintln!("Loading {} from {}...", model_name, blob_path.display());
         let model = Model::load(&blob_path.to_string_lossy())?;
         let reader = GgufReader::load(&blob_path.to_string_lossy())?;
@@ -318,10 +331,9 @@ async fn async_main() -> Result<()> {
             if let Some(task) = cli.task {
                 run_agent_loop(&client, &mut state, &task).await;
             } else if std::io::stdin().is_terminal() && std::io::stdout().is_terminal() {
-                // Interactive TUI defaults to GLM-5.2 cloud model.
-                if !cli.cloud {
-                    if let Ok(_base) = client.set_provider("nvidia") {
-                        let model = DEFAULT_CLOUD_MODEL.to_string();
+                if cli.cloud {
+                    if let Ok(_base) = client.set_provider(&cli.provider) {
+                        let model = cli.cloud_model.clone().unwrap_or_else(|| DEFAULT_CLOUD_MODEL.to_string());
                         state.config.coder_model = model.clone();
                         state.config.planner_model = model.clone();
                         state.config.summarizer_model = model.clone();
