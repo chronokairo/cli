@@ -9,6 +9,7 @@ name = "ckc"
 path = "src/main.rs"
 
 [features]
+default = ["gpu"]
 gpu = ["dep:ocl"]
 
 [dependencies]

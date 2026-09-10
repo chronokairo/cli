@@ -60,6 +60,7 @@ pub(crate) enum Commands {
     Run {
         model: String,
         prompt: Option<String>,
+        no_gpu: bool,
     },
     /// List cloud models discovered from provider APIs
     Cloud {
@@ -157,7 +158,9 @@ impl ParseError {
 type Parsed<T> = std::result::Result<T, ParseError>;
 // canonical long name, optional short name, whether a value is required
 const ROOT: &[(&str, &str, bool)] = &[
-    ("local", "", false), ("gpu", "", false), ("no-gpu", "", false), ("cpu", "", false), ("model", "", true),
+    ("local", "", false), ("gpu", "", false), ("no-gpu", "", false), ("cpu", "", false),
+    ("cpu-only", "", false), ("deactive-gpu", "", false), ("deactivate-gpu", "", false), ("disable-gpu", "", false),
+    ("model", "", true),
     ("dir", "d", true), ("cloud", "", false), ("provider", "", true),
     ("cloud-model", "", true), ("resume", "", false), ("cont", "", false),
     ("download-embedding-model", "", false),
@@ -203,13 +206,13 @@ fn utf8(value: OsString, label: &str) -> Parsed<String> {
 }
 fn help(command: &str) -> String {
     let usage = match command {
-        "" => "[OPTIONS] [TASK] [COMMAND]\n\nCommands:\n  check  tui  repl  models  pull  rm  show  cp  ps  run\n  cloud  providers  bench  exec  app-server  mcp-server  translate  context\n\nOptions:\n  --local  --gpu  --no-gpu (alias: --cpu)  --model <MODEL>  -d, --dir <DIR> [default: .]\n  --cloud  --provider <ID>  --cloud-model <MODEL>\n  --resume  --cont (alias: --continue)  --download-embedding-model",
+        "" => "[OPTIONS] [TASK] [COMMAND]\n\nCommands:\n  check  tui  repl  models  pull  rm  show  cp  ps  run\n  cloud  providers  bench  exec  app-server  mcp-server  translate  context\n\nOptions:\n  --local  --gpu  --cpu-only (alias: --no-gpu, --cpu, --deactive-gpu)  --model <MODEL>  -d, --dir <DIR> [default: .]\n  --cloud  --provider <ID>  --cloud-model <MODEL>\n  --resume  --cont (alias: --continue)  --download-embedding-model",
         "pull" => "<MODEL>\nDownload a model into ~/.chronokairo/models\nExamples:\n  ckc pull qwen2.5-coder:3b\n  ckc pull nemotron-mini:4b\n  ckc pull ministral:3b\n  ckc pull phi-4-mini:3.8b\n  ckc pull https://huggingface.co/.../model.gguf",
         "rm" | "remove" => "<MODEL>\nDelete a local model and its aliases from ~/.chronokairo/models\nExamples:\n  ckc rm qwen2.5-coder:3b",
         "show" | "inspect" => "<MODEL>\nShow detailed metadata for a local GGUF model\nExamples:\n  ckc show qwen2.5-coder:3b",
         "cp" | "copy" => "<SOURCE> <TARGET>\nCreate an alias for a local model\nExamples:\n  ckc cp qwen2.5-coder:3b coder",
         "ps" => "\nShow system hardware, VRAM, and model runtime status",
-        "run" => "<MODEL> [PROMPT]\nRun direct local inference or interactive chat\nExamples:\n  ckc run qwen2.5-coder:3b \"Write a quicksort in Rust\"\n  ckc run qwen2.5-coder:3b",
+        "run" => "<MODEL> [PROMPT] [--cpu-only]\nRun direct local inference or interactive chat\nExamples:\n  ckc run qwen2.5-coder:3b \"Write a quicksort in Rust\"\n  ckc run qwen2.5-coder:3b\n  ckc run qwen2.5-coder:3b --cpu-only",
         "cloud" => "[QUERY]",
         "providers" => "<COMMAND>\nCommands: list, show, set, remove, enable, test, import",
         "providers set" => "<PROVIDER> [API_KEY] [--base <URL>]\nReads a hidden key from stdin when API_KEY is omitted.",
@@ -272,10 +275,10 @@ impl Cli {
     pub fn parse() -> Self {
         match Self::try_parse(std::env::args_os().skip(1)) {
             Ok(cli) => cli,
-            Err(error) => {
-                if error.code == 0 { print!("{}", error.text); }
-                else { eprintln!("error: {}\nUse --help for usage.", error.text); }
-                std::process::exit(error.code);
+            Err(err) => {
+                let out = if err.code == 0 { &mut std::io::stdout() as &mut dyn std::io::Write } else { &mut std::io::stderr() };
+                let _ = writeln!(out, "{}", err.text);
+                std::process::exit(err.code);
             }
         }
     }
@@ -289,7 +292,12 @@ impl Cli {
         }
         let mut root = scan(&mut args, ROOT, "", true)?;
         let command = root.command.take().map(|command| parse_command(&command, &mut args)).transpose()?;
-        let no_gpu = root.flag("no-gpu") || root.flag("cpu");
+        let no_gpu = root.flag("no-gpu")
+            || root.flag("cpu")
+            || root.flag("cpu-only")
+            || root.flag("deactive-gpu")
+            || root.flag("deactivate-gpu")
+            || root.flag("disable-gpu");
         let gpu = if no_gpu {
             false
         } else if root.flag("gpu") {
@@ -314,6 +322,14 @@ fn parse_command(command: &str, args: &mut VecDeque<OsString>) -> Parsed<Command
         "exec" => &[("plan", "", false), ("jsonl", "", false), ("yes", "", false)],
         "translate" => &[("model", "m", true), ("to", "t", true), ("gpu", "g", true), ("out", "o", true)],
         "context" => &[("task", "t", true), ("budget", "b", true)],
+        "run" => &[
+            ("cpu-only", "", false),
+            ("no-gpu", "", false),
+            ("cpu", "", false),
+            ("deactive-gpu", "", false),
+            ("deactivate-gpu", "", false),
+            ("disable-gpu", "", false),
+        ],
         _ => &[],
     };
     let mut o = scan(args, specs, command, false)?;
@@ -326,12 +342,18 @@ fn parse_command(command: &str, args: &mut VecDeque<OsString>) -> Parsed<Command
         "ps" => Commands::Ps,
         "run" => {
             let model = o.text("MODEL")?;
+            let no_gpu = o.flag("cpu-only")
+                || o.flag("no-gpu")
+                || o.flag("cpu")
+                || o.flag("deactive-gpu")
+                || o.flag("deactivate-gpu")
+                || o.flag("disable-gpu");
             let mut words = Vec::new();
             while let Some(w) = o.optional_text("PROMPT")? {
                 words.push(w);
             }
             let prompt = if words.is_empty() { None } else { Some(words.join(" ")) };
-            Commands::Run { model, prompt }
+            Commands::Run { model, prompt, no_gpu }
         }
         "app-server" => Commands::AppServer, "mcp-server" => Commands::McpServer,
         "cloud" => Commands::Cloud { query: o.optional_text("QUERY")?.unwrap_or_default() },

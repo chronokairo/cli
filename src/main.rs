@@ -218,8 +218,8 @@ async fn async_main() -> Result<()> {
         Some(Commands::Show { model }) => return crate::llm::manage::show_model(model),
         Some(Commands::Cp { source, target }) => return crate::llm::manage::cp_model(source, target),
         Some(Commands::Ps) => return crate::llm::manage::ps_status(),
-        Some(Commands::Run { model, prompt }) => {
-            return crate::llm::manage::run_direct(model, prompt.as_deref(), cli.no_gpu);
+        Some(Commands::Run { model, prompt, no_gpu }) => {
+            return crate::llm::manage::run_direct(model, prompt.as_deref(), *no_gpu || cli.no_gpu);
         }
         Some(Commands::Models) => {
             return crate::llm::manage::list_models_detailed(&cfg.models_dir);
@@ -259,11 +259,9 @@ async fn async_main() -> Result<()> {
         }
         Some(Commands::Models) => unreachable!(),
         Some(Commands::Tui) => {
-            // TUI defaults to the GLM-5.2 cloud model when no explicit --cloud
-            // flag was given and the nvidia provider is available.
-            if !cli.cloud {
-                if let Ok(_base) = client.set_provider("nvidia") {
-                    let model = DEFAULT_CLOUD_MODEL.to_string();
+            if cli.cloud {
+                if let Ok(_base) = client.set_provider(&cli.provider) {
+                    let model = cli.cloud_model.clone().unwrap_or_else(|| DEFAULT_CLOUD_MODEL.to_string());
                     state.config.coder_model = model.clone();
                     state.config.planner_model = model.clone();
                     state.config.summarizer_model = model.clone();
