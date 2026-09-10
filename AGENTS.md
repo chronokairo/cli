@@ -101,6 +101,7 @@ Each index.md file contains a list of files in that directory with brief descrip
 - [`docs/adr/0018-versioned-h-battery-and-tool-resilience.md`](docs/adr/0018-versioned-h-battery-and-tool-resilience.md) — Versioned H-Battery & Resilient Tool Protocol (v0.9.5)
 - [`docs/adr/0019-provider-native-model-catalog.md`](docs/adr/0019-provider-native-model-catalog.md) — Provider-Native Model Catalog
 - [`docs/adr/0020-rebrand-chronokairo-ckc.md`](docs/adr/0020-rebrand-chronokairo-ckc.md) — ChronoKairo Rebranding and CKC Binary Transition
+- [`docs/adr/0021-ckc-pull-local-gguf-models.md`](docs/adr/0021-ckc-pull-local-gguf-models.md) — Local GGUF Model Pulling and Resolution (`ckc pull`)
 - [`docs/gap-analysis-2026-08.md`](docs/gap-analysis-2026-08.md) — 2026 Competitor Gap Analysis Report
 - [`docs/gap-analysis-vision-2026-08.md`](docs/gap-analysis-vision-2026-08.md) — Vision vs. Codebase Gap Analysis (synthesis)
 - [`docs/explore-report-01-llm-routing-inference.md`](docs/explore-report-01-llm-routing-inference.md) — Explore report: LLM routing & local inference layer

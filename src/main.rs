@@ -73,13 +73,16 @@ async fn build_router(cli: &Cli, cfg: &mut Config) -> Result<LlmRouter> {
         let reader = GgufReader::load(&blob_path.to_string_lossy())?;
         let tokenizer = Tokenizer::load_from_gguf(&reader)?;
         let mut engine = InferenceEngine::new(model, tokenizer, cfg.max_seq_len);
-        if cli.gpu {
-            engine.init_gpu();
-            if !engine.gpu_active() {
-                println!("Warning: GPU not available, falling back to CPU.");
-            } else {
-                println!("GPU acceleration active.");
-            }
+        if cli.no_gpu {
+            engine.disable_gpu();
+            println!("GPU acceleration disabled by flag (--no-gpu); running on CPU.");
+        } else if engine.gpu_active() {
+            println!("GPU acceleration active (OpenCL).");
+        } else if cli.gpu {
+            #[cfg(feature = "gpu")]
+            println!("Notice: OpenCL GPU not available; running on CPU.");
+            #[cfg(not(feature = "gpu"))]
+            println!("Notice: Built without --features gpu; running on CPU.");
         }
         LlmClient::local(engine)
     } else {
@@ -141,6 +144,9 @@ async fn async_main() -> Result<()> {
     } else {
         logger::CkiLogger::init_stderr(logger::Level::Info);
     }
+    if cli.no_gpu {
+        std::env::set_var("CKC_NO_GPU", "1");
+    }
     providers::load_dotenv();
     llm::infer::ops::init_thread_pool();
     let mut cfg = Config {
@@ -190,6 +196,11 @@ async fn async_main() -> Result<()> {
             *budget,
         );
         println!("{pack}");
+        return Ok(());
+    }
+
+    if let Some(Commands::Pull { model }) = &cli.command {
+        crate::llm::pull::pull_model(model)?;
         return Ok(());
     }
 
@@ -297,6 +308,7 @@ async fn async_main() -> Result<()> {
             .await?;
         }
         Some(Commands::Context { .. }) => unreachable!(),
+        Some(Commands::Pull { .. }) => unreachable!(),
         None => {
             if let Some(task) = cli.task {
                 run_agent_loop(&client, &mut state, &task).await;

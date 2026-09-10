@@ -4,6 +4,7 @@ pub mod infer;
 pub mod model_resolver;
 pub mod prompt;
 pub mod provider_chain;
+pub mod pull;
 pub mod router;
 pub mod routing;
 pub mod tier;

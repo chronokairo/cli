@@ -6,8 +6,10 @@ pub(crate) struct Cli {
     pub(crate) command: Option<Commands>,
     /// Use local GGUF inference instead of Ollama
     pub(crate) local: bool,
-    /// Offload matrix multiplications to OpenCL GPU (requires --local and --features gpu)
+    /// OpenCL GPU acceleration (active by default when built with --features gpu)
     pub(crate) gpu: bool,
+    /// Disable OpenCL GPU acceleration and force CPU inference
+    pub(crate) no_gpu: bool,
     /// Model name (e.g. gemma3:1b) or path to a .gguf file
     pub(crate) model: Option<String>,
     pub(crate) dir: String,
@@ -34,6 +36,11 @@ pub(crate) enum Commands {
     Repl,
     /// List locally available models
     Models,
+    /// Pull/download a GGUF model from Hugging Face into ~/.chronokairo/models
+    Pull {
+        /// Model name (e.g. qwen2.5-coder:3b, nemotron-mini:4b) or Hugging Face URL
+        model: String,
+    },
     /// List cloud models discovered from provider APIs
     Cloud {
         /// Filter by name/family/provider (empty = show all)
@@ -130,12 +137,12 @@ impl ParseError {
 type Parsed<T> = std::result::Result<T, ParseError>;
 // canonical long name, optional short name, whether a value is required
 const ROOT: &[(&str, &str, bool)] = &[
-    ("local", "", false), ("gpu", "", false), ("model", "", true),
+    ("local", "", false), ("gpu", "", false), ("no-gpu", "", false), ("cpu", "", false), ("model", "", true),
     ("dir", "d", true), ("cloud", "", false), ("provider", "", true),
     ("cloud-model", "", true), ("resume", "", false), ("cont", "", false),
     ("download-embedding-model", "", false),
 ];
-const COMMANDS: &[&str] = &["check", "tui", "repl", "models", "cloud", "providers", "bench", "exec", "app-server", "mcp-server", "translate", "context"];
+const COMMANDS: &[&str] = &["check", "tui", "repl", "models", "pull", "cloud", "providers", "bench", "exec", "app-server", "mcp-server", "translate", "context"];
 
 #[derive(Default)]
 struct Options {
@@ -172,7 +179,8 @@ fn utf8(value: OsString, label: &str) -> Parsed<String> {
 }
 fn help(command: &str) -> String {
     let usage = match command {
-        "" => "[OPTIONS] [TASK] [COMMAND]\n\nCommands:\n  check  tui  repl  models  cloud  providers  bench\n  exec   app-server  mcp-server  translate  context\n\nOptions:\n  --local  --gpu  --model <MODEL>  -d, --dir <DIR> [default: .]\n  --cloud  --provider <ID>  --cloud-model <MODEL>\n  --resume  --cont (alias: --continue)  --download-embedding-model",
+        "" => "[OPTIONS] [TASK] [COMMAND]\n\nCommands:\n  check  tui  repl  models  pull  cloud  providers  bench\n  exec   app-server  mcp-server  translate  context\n\nOptions:\n  --local  --gpu  --no-gpu (alias: --cpu)  --model <MODEL>  -d, --dir <DIR> [default: .]\n  --cloud  --provider <ID>  --cloud-model <MODEL>\n  --resume  --cont (alias: --continue)  --download-embedding-model",
+        "pull" => "<MODEL>\nDownload a model into ~/.chronokairo/models\nExamples:\n  ckc pull qwen2.5-coder:3b\n  ckc pull nemotron-mini:4b\n  ckc pull ministral:3b\n  ckc pull phi-4-mini:3.8b\n  ckc pull https://huggingface.co/.../model.gguf",
         "cloud" => "[QUERY]",
         "providers" => "<COMMAND>\nCommands: list, show, set, remove, enable, test, import",
         "providers set" => "<PROVIDER> [API_KEY] [--base <URL>]\nReads a hidden key from stdin when API_KEY is omitted.",
@@ -252,8 +260,16 @@ impl Cli {
         }
         let mut root = scan(&mut args, ROOT, "", true)?;
         let command = root.command.take().map(|command| parse_command(&command, &mut args)).transpose()?;
+        let no_gpu = root.flag("no-gpu") || root.flag("cpu");
+        let gpu = if no_gpu {
+            false
+        } else if root.flag("gpu") {
+            true
+        } else {
+            cfg!(feature = "gpu")
+        };
         let cli = Self {
-            command, local: root.flag("local"), gpu: root.flag("gpu"), model: root.value("model")?,
+            command, local: root.flag("local"), gpu, no_gpu, model: root.value("model")?,
             dir: root.value_or("dir", ".")?, cloud: root.flag("cloud"), provider: root.value_or("provider", DEFAULT_PROVIDER)?,
             cloud_model: root.value("cloud-model")?, resume: root.flag("resume"), cont: root.flag("cont"),
             download_embedding_model: root.flag("download-embedding-model"), task: root.optional_text("TASK")?,
@@ -274,7 +290,8 @@ fn parse_command(command: &str, args: &mut VecDeque<OsString>) -> Parsed<Command
     let mut o = scan(args, specs, command, false)?;
     let parsed = match command {
         "check" => Commands::Check, "tui" => Commands::Tui, "repl" => Commands::Repl,
-        "models" => Commands::Models, "app-server" => Commands::AppServer, "mcp-server" => Commands::McpServer,
+        "models" => Commands::Models, "pull" => Commands::Pull { model: o.text("MODEL")? },
+        "app-server" => Commands::AppServer, "mcp-server" => Commands::McpServer,
         "cloud" => Commands::Cloud { query: o.optional_text("QUERY")?.unwrap_or_default() },
         "bench" => Commands::Bench { category: o.value_or("category", "coding")?, output: o.value_or("output", "bench_results.json")?, cloud: o.flag("cloud") },
         "exec" => Commands::Exec { task: o.text("TASK")?, plan: o.flag("plan"), jsonl: o.flag("jsonl"), yes: o.flag("yes") },
@@ -316,7 +333,7 @@ mod tests {
     }
     #[test]
     fn every_command_parses() {
-        for args in [&["check"][..], &["tui"], &["repl"], &["models"], &["cloud"], &["bench"], &["exec", "task"], &["app-server"], &["mcp-server"], &["translate", "a.pdf"], &["context"], &["providers", "list"], &["providers", "show"], &["providers", "import"], &["providers", "remove", "id"], &["providers", "test", "id"], &["providers", "set", "id"], &["providers", "enable", "id", "false"]] {
+        for args in [&["check"][..], &["tui"], &["repl"], &["models"], &["pull", "qwen2.5-coder:3b"], &["cloud"], &["bench"], &["exec", "task"], &["app-server"], &["mcp-server"], &["translate", "a.pdf"], &["context"], &["providers", "list"], &["providers", "show"], &["providers", "import"], &["providers", "remove", "id"], &["providers", "test", "id"], &["providers", "set", "id"], &["providers", "enable", "id", "false"]] {
             assert!(parse(args).is_ok(), "{args:?}");
         }
     }

@@ -132,6 +132,20 @@ Download the default GGUF embedding model (`Qwen3-Embedding 0.6B Q8`) for local 
 ckc --download-embedding-model
 ```
 
+### Local GGUF Models (`ckc pull` & `--local`)
+
+Download verified GGUF models directly from Hugging Face into `~/.chronokairo/models/` for 100% offline, zero-lib agent execution:
+```bash
+# Pull verified coding SLM for edge hardware (e.g. GTX 1650 4GB VRAM)
+ckc pull qwen2.5-coder:3b
+
+# Run entirely locally on GPU (or CPU with --no-gpu)
+ckc --local --model qwen2.5-coder:3b
+
+# List downloaded and detected local models
+ckc models
+```
+
 ### Provider Configuration
 
 Configure cloud LLM providers (keys stored securely at `~/.chronokairo/providers.toml`):
@@ -198,3 +212,4 @@ Detailed architectural decision records are maintained in [`docs/adr/`](docs/adr
 - `0011–0015`: Sub-agent task delegation, MCP client, streaming deltas, circuit breaker, competitive backlog.
 - `0016–0019`: Vision gap analysis, specification-locked execution, versioned H-battery, provider-native model catalog.
 - `0020`: Rebranding to ChronoKairo and `ckc` binary transition with backward compatibility fallbacks.
+- `0021`: Local GGUF model pulling and resolution (`ckc pull`).

@@ -42,6 +42,28 @@ pub fn list_models(models_dir: &Path) -> Vec<String> {
 /// List all model names from a single candidate root directory.
 pub fn list_models_in_root(root: &Path) -> Vec<String> {
     let mut models = Vec::new();
+
+    // 1. Direct .gguf files in root
+    if let Ok(entries) = std::fs::read_dir(root) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.is_file() {
+                if let Some(ext) = p.extension() {
+                    if ext.eq_ignore_ascii_case("gguf") {
+                        let fname = entry.file_name().to_string_lossy().to_string();
+                        let nice_name = crate::llm::pull::TRUSTED_MODELS
+                            .iter()
+                            .find(|tm| tm.filename.eq_ignore_ascii_case(&fname))
+                            .map(|tm| tm.name.to_string())
+                            .unwrap_or(fname);
+                        models.push(nice_name);
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. Manifests (Ollama format)
     let manifests_root = root
         .join("manifests")
         .join("registry.ollama.ai")
@@ -66,14 +88,24 @@ pub fn list_models_in_root(root: &Path) -> Vec<String> {
 fn candidate_roots(models_dir: &Path) -> Vec<PathBuf> {
     let mut roots = vec![models_dir.to_path_buf()];
 
+    let chrono_models = crate::llm::pull::models_dir();
+    if !roots.contains(&chrono_models) && chrono_models.exists() {
+        roots.push(chrono_models);
+    }
+
+    let legacy_models = crate::config::home_dir().join(".anamnesic").join("models");
+    if !roots.contains(&legacy_models) && legacy_models.exists() {
+        roots.push(legacy_models);
+    }
+
     let system = PathBuf::from("/usr/share/ollama/.ollama/models");
-    if system != models_dir && system.exists() {
+    if !roots.contains(&system) && system.exists() {
         roots.push(system);
     }
 
     if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
         let user = PathBuf::from(home).join(".ollama").join("models");
-        if user != models_dir && user.exists() {
+        if !roots.contains(&user) && user.exists() {
             roots.push(user);
         }
     }
@@ -82,6 +114,65 @@ fn candidate_roots(models_dir: &Path) -> Vec<PathBuf> {
 }
 
 fn try_resolve(name: &str, root: &Path) -> Option<PathBuf> {
+    // 1. Direct file in root
+    let direct = root.join(name);
+    if direct.is_file() {
+        return Some(direct);
+    }
+    let direct_gguf = root.join(format!("{name}.gguf"));
+    if direct_gguf.is_file() {
+        return Some(direct_gguf);
+    }
+
+    // 2. Alias files created by `ckc pull`
+    let clean_alias = name.replace(':', "-");
+    for alias_name in &[
+        format!("{clean_alias}.alias"),
+        format!("{name}.alias"),
+        format!("{}.alias", name.split(':').next().unwrap_or(name)),
+    ] {
+        let alias_path = root.join(alias_name);
+        if alias_path.is_file() {
+            if let Ok(target) = std::fs::read_to_string(&alias_path) {
+                let target = target.trim();
+                let resolved = root.join(target);
+                if resolved.is_file() {
+                    return Some(resolved);
+                }
+            }
+        }
+    }
+
+    // 3. Match against trusted model catalog
+    let name_lower = name.to_lowercase();
+    for tm in crate::llm::pull::TRUSTED_MODELS {
+        if tm.name == name_lower || tm.aliases.iter().any(|&a| a == name_lower) {
+            let p = root.join(tm.filename);
+            if p.is_file() {
+                return Some(p);
+            }
+        }
+    }
+
+    // 4. Substring/prefix match for .gguf files in root
+    let search_token = clean_alias.to_lowercase();
+    if let Ok(entries) = std::fs::read_dir(root) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.is_file() {
+                if let Some(ext) = p.extension() {
+                    if ext.eq_ignore_ascii_case("gguf") {
+                        let fname = p.file_name().unwrap_or_default().to_string_lossy().to_lowercase();
+                        if fname.contains(&search_token) {
+                            return Some(p);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 5. Ollama manifests
     let (model_name, tag) = name.split_once(':').unwrap_or((name, "latest"));
 
     let manifest_path = root
@@ -197,6 +288,50 @@ mod tests {
         let root = temp_dir("empty");
         let models = list_models_in_root(&root);
         assert!(models.is_empty(), "got: {models:?}");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn resolves_direct_gguf_in_root() {
+        let root = temp_dir("gguf_in_root");
+        let file = root.join("my-model.gguf");
+        fs::write(&file, b"gguf-data").unwrap();
+        let resolved = resolve_model("my-model", &root).unwrap();
+        assert_eq!(resolved, file);
+        let resolved_ext = resolve_model("my-model.gguf", &root).unwrap();
+        assert_eq!(resolved_ext, file);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn resolves_via_alias_file() {
+        let root = temp_dir("alias");
+        let target = root.join("actual-weights-v1.gguf");
+        fs::write(&target, b"weights").unwrap();
+        fs::write(root.join("qwen2.5-coder-3b.alias"), b"actual-weights-v1.gguf").unwrap();
+        let resolved = resolve_model("qwen2.5-coder:3b", &root).unwrap();
+        assert_eq!(resolved, target);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn resolves_trusted_model_filename() {
+        let root = temp_dir("trusted");
+        let target = root.join("qwen2.5-coder-3b-instruct-q4_k_m.gguf");
+        fs::write(&target, b"qwen3b").unwrap();
+        let resolved = resolve_model("qwen2.5-coder:3b", &root).unwrap();
+        assert_eq!(resolved, target);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn lists_direct_gguf_models() {
+        let root = temp_dir("list_gguf");
+        fs::write(root.join("qwen2.5-coder-3b-instruct-q4_k_m.gguf"), b"x").unwrap();
+        fs::write(root.join("custom-model.gguf"), b"y").unwrap();
+        let models = list_models_in_root(&root);
+        assert!(models.contains(&"qwen2.5-coder:3b".to_string()));
+        assert!(models.contains(&"custom-model.gguf".to_string()));
         let _ = fs::remove_dir_all(&root);
     }
 }

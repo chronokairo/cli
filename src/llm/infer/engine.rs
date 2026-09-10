@@ -277,7 +277,8 @@ impl InferenceEngine {
         let kv_cache_size = (model.n_layer * 2 * max_seq_len as i64 * model.n_embd) as usize;
         let kv_cache = vec![0.0f32; kv_cache_size];
 
-        InferenceEngine {
+        #[allow(unused_mut)]
+        let mut engine = InferenceEngine {
             model,
             tokenizer,
             kv_cache,
@@ -288,6 +289,22 @@ impl InferenceEngine {
             emb_buf,
             #[cfg(feature = "gpu")]
             gpu: None,
+        };
+        #[cfg(feature = "gpu")]
+        {
+            if !std::env::var("CKC_NO_GPU").is_ok_and(|v| v == "1" || v == "true") {
+                engine.init_gpu();
+            }
+        }
+        engine
+    }
+
+    /// Explicitly disable GPU acceleration and release any OpenCL resources.
+    pub fn disable_gpu(&mut self) {
+        #[cfg(feature = "gpu")]
+        {
+            self.gpu = None;
+            crate::cki_info!("GPU acceleration disabled; using CPU");
         }
     }
 
