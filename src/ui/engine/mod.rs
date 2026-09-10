@@ -1,4 +1,5 @@
 //! Native Zero-Lib Terminal UI Engine based on microsoft/edit architecture.
+#![allow(unused_imports)]
 
 pub mod buffer;
 pub mod event;

@@ -1,8 +1,8 @@
 1. Project Type and Tech Stack
 Language: Rust (2021 edition)  
 Build System: Cargo (Cargo.toml / Cargo.lock)  
-Binary: cki (entry point: src/main.rs)  
-Description: "ChronoKairo CLI (CKI) — Zero-Lib coding agent & context harness"
+Binary: ckc (entry point: src/main.rs)  
+Description: "ChronoKairo CLI (CKC) — Zero-Lib coding agent & context harness"
 Key Dependencies
 Category	Crates
 TUI	ratatui (0.29, with unstable-rendered-line-info), crossterm (0.28)
@@ -16,7 +16,7 @@ Diff/Text	diffy (0.4), pulldown-cmark (0.12), unicode-segmentation, unicode-widt
 CLI	clap (4, derive)
 Testing	wiremock (0.6, dev-dependency)
 2. Directory Structure Overview
-C:\Users\luann\Documents\GitHub\anamnesic-coder/
+C:\Users\luann\Documents\GitHub\chronokairo-coder/
 ├── Cargo.toml
 ├── Cargo.lock
 ├── src/
@@ -105,7 +105,7 @@ Key files:
 - JSON-RPC 2.0 protocol: initialize, tools/list, tools/call
 - list_tools() → converts to ToolDef format
 - has_tool() / call_tool() for dispatching
-- Tests: config creation/equality, fake_mcp_server_process (spawns self as fake MCP server via ANAMNESIC_FAKE_MCP_SERVER=1)
+- Tests: config creation/equality, fake_mcp_server_process (spawns self as fake MCP server via CHRONOKAIRO_FAKE_MCP_SERVER=1)
 - src/agent/agent_loop.rs
 - Lines 675–683: connect_mcp_clients() — connects all configured MCP servers at startup
 - Lines 685–717: try_mcp_tool() — dispatches tool calls to MCP clients with approval policy
@@ -167,7 +167,7 @@ src/tools/transaction.rs
 src/agent/state.rs
 Test patterns:
 - Most tests use temp directories (std::env::temp_dir()) with cleanup
-- MCP tests use a clever self-spawning fake server (ANAMNESIC_FAKE_MCP_SERVER=1)
+- MCP tests use a clever self-spawning fake server (CHRONOKAIRO_FAKE_MCP_SERVER=1)
 - Platform-gated tests: #[cfg(unix)] for symlink tests, #[cfg(windows)] for verbatim path tests
 - Agent loop tests use a test_state() helper that creates isolated temp workspaces
 6. Competitive Backlog References (C1, C2, C8)

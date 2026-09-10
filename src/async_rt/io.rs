@@ -1,4 +1,5 @@
 //! Async read and write extension traits over std::io.
+#![allow(async_fn_in_trait)]
 
 use std::io::{self, Read, Write};
 

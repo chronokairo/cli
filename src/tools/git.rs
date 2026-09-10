@@ -87,7 +87,7 @@ mod tests {
 
     fn temp_repo_dir(name: &str) -> String {
         let dir =
-            std::env::temp_dir().join(format!("anamnesic-git-tools-{name}-{}", std::process::id()));
+            std::env::temp_dir().join(format!("chronokairo-git-tools-{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir.to_string_lossy().to_string()

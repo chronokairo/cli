@@ -330,7 +330,7 @@ mod tests {
     #[test]
     fn reports_unavailable_without_a_known_manifest() {
         let root =
-            std::env::temp_dir().join(format!("anamnesic-test-runner-none-{}", std::process::id()));
+            std::env::temp_dir().join(format!("chronokairo-test-runner-none-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         let config = Config {

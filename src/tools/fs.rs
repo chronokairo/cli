@@ -94,7 +94,7 @@ mod tests {
     fn temp_workspace() -> std::path::PathBuf {
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
         let dir = std::env::temp_dir().join(format!(
-            "anamnesic-file-tools-test-{}-{n}",
+            "chronokairo-file-tools-test-{}-{n}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&dir);
@@ -270,7 +270,7 @@ mod tests {
     fn allowlist_permits_external_path() {
         let workspace = temp_workspace();
         let outside = std::env::temp_dir().join(format!(
-            "anamnesic-allow-out-{}-{}",
+            "chronokairo-allow-out-{}-{}",
             std::process::id(),
             COUNTER.fetch_add(1, Ordering::Relaxed)
         ));
@@ -290,7 +290,7 @@ mod tests {
         );
         // a different outside area is still blocked
         let other =
-            std::env::temp_dir().join(format!("anamnesic-allow-other-{}", std::process::id()));
+            std::env::temp_dir().join(format!("chronokairo-allow-other-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&other);
         std::fs::create_dir_all(&other).unwrap();
         std::fs::write(other.join("x.txt"), "nope").unwrap();
@@ -741,7 +741,7 @@ impl FileTools {
             .ok_or_else(|| crate::error::anyhow!("file has no parent directory"))?;
         fs::create_dir_all(parent)?;
         let counter = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let temporary = parent.join(format!(".anamnesic-{}-{counter}.tmp", std::process::id()));
+        let temporary = parent.join(format!(".chronokairo-{}-{counter}.tmp", std::process::id()));
         fs::write(&temporary, content)?;
         if let Err(error) = fs::rename(&temporary, path) {
             let _ = fs::remove_file(&temporary);
@@ -758,7 +758,7 @@ mod transactional_tests {
 
     fn workspace(name: &str) -> std::path::PathBuf {
         let path = std::env::temp_dir().join(format!(
-            "anamnesic-fs-transaction-{name}-{}",
+            "chronokairo-fs-transaction-{name}-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&path);

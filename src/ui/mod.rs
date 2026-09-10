@@ -1671,7 +1671,7 @@ pub fn run_ui(client: LlmRouter, state: AgentState) -> Result<(), Box<dyn Error>
     // App loop
     {
         let mut init = app.lock().unwrap();
-        init.add_message("System", "Anamnesic is ready. Type '/' for commands (e.g. /model), ask for a change, or inspect files.");
+        init.add_message("System", "ChronoKairo is ready. Type '/' for commands (e.g. /model), ask for a change, or inspect files.");
     }
 
     loop {
@@ -2717,7 +2717,7 @@ fn draw<B: crate::ui::engine::ratatui::backend::Backend>(
             )
             .split(size);
         // Compact single-line header (modern 2026 harness style):
-        // [ANAMNESIC] ⟡ model · provider · ⎇ branch · mode        ctx: 1.2k / 128k · $0.002
+        // [CHRONOKAIRO] ⟡ model · provider · ⎇ branch · mode        ctx: 1.2k / 128k · $0.002
         let avail_w = page[0].width as usize;
         let model_tag = if app.auto_model {
             format!("auto:{}", truncate_str(&app.model, 16))
@@ -2736,7 +2736,7 @@ fn draw<B: crate::ui::engine::ratatui::backend::Backend>(
 
         let mut left_spans = vec![
             Span::styled(
-                " ANAMNESIC ",
+                " CHRONOKAIRO ",
                 Style::default()
                     .fg(Color::Black)
                     .bg(Color::Cyan)
@@ -4353,7 +4353,7 @@ mod tests {
         static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let id = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let mut cfg = crate::config::settings::Config::default();
-        let base = std::env::temp_dir().join(format!("anamnesic-ui-{}-{}", std::process::id(), id));
+        let base = std::env::temp_dir().join(format!("chronokairo-ui-{}-{}", std::process::id(), id));
         cfg.workspace_dir = base.join("workspace");
         cfg.memory_dir = base.join("memory");
         let state = Arc::new(Mutex::new(

@@ -373,7 +373,7 @@ mod tests {
 
     fn workspace(name: &str) -> PathBuf {
         let root = std::env::temp_dir().join(format!(
-            "anamnesic-transaction-{name}-{}",
+            "chronokairo-transaction-{name}-{}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&root);

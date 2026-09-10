@@ -1452,7 +1452,7 @@ fn execute_tool(
             let skills = state.skills.list();
             if skills.is_empty() {
                 ToolExecutionResult::output(
-                    "No skills found. Add Markdown files to ./skills or ~/.anamnesic/skills.",
+                    "No skills found. Add Markdown files to ./skills or ~/.chronokairo/skills.",
                 )
             } else {
                 let body: Vec<String> = skills
@@ -2174,7 +2174,7 @@ fn coding_tools(state: &mut AgentState) -> Vec<crate::llm::client::ToolDef> {
         ),
         tool(
             "memory_search",
-            "Semantic recall across past sessions and assistant outputs. Returns the most similar stored texts with scores. Requires the global embedding model (run --download-embedding-model once; stored in ~/.anamnesic/models). The first call loads the model (may take a minute or two on CPU).",
+            "Semantic recall across past sessions and assistant outputs. Returns the most similar stored texts with scores. Requires the global embedding model (run `ckc --download-embedding-model` once; stored in ~/.chronokairo/models). The first call loads the model (may take a minute or two on CPU).",
             object(
                 serde_json::json!({
                     "query": {"type":"string"},
@@ -2185,7 +2185,7 @@ fn coding_tools(state: &mut AgentState) -> Vec<crate::llm::client::ToolDef> {
         ),
         tool(
             "list_skills",
-            "List available skill packs discovered in ./skills and ~/.anamnesic/skills. Each skill is a Markdown document of specialized instructions.",
+            "List available skill packs discovered in ./skills and ~/.chronokairo/skills. Each skill is a Markdown document of specialized instructions.",
             object(serde_json::json!({}), serde_json::json!([])),
         ),
         tool(
@@ -2693,7 +2693,7 @@ mod tests {
 
     fn test_state(tag: &str) -> (AgentState, std::path::PathBuf) {
         let root =
-            std::env::temp_dir().join(format!("anamnesic-loop-{tag}-{}", std::process::id()));
+            std::env::temp_dir().join(format!("chronokairo-loop-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let config = crate::config::settings::Config {
             workspace_dir: root.join("workspace"),
@@ -2854,7 +2854,7 @@ mod tests {
     #[test]
     fn failed_mutation_repairs_then_fails_when_budget_is_exhausted() {
         let root =
-            std::env::temp_dir().join(format!("anamnesic-gate-state-{}", std::process::id()));
+            std::env::temp_dir().join(format!("chronokairo-gate-state-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let config = crate::config::settings::Config {
             workspace_dir: root.join("workspace"),
@@ -2959,7 +2959,7 @@ mod tests {
                 "--exact".into(),
                 "mcp::tests::fake_mcp_server_process".into(),
             ],
-            env: vec![("ANAMNESIC_FAKE_MCP_SERVER".into(), "1".into())],
+            env: vec![("CHRONOKAIRO_FAKE_MCP_SERVER".into(), "1".into())],
         };
         crate::mcp::McpClient::connect(&config).expect("fake MCP server should start")
     }

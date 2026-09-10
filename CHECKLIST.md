@@ -1,4 +1,4 @@
-# Anamnesic Coder v1.0 — Release Checklist
+# ChronoKairo Coder v1.0 — Release Checklist
 
 > Diferença entre "componentes existem" e "o goal é cumprido em uso real".
 > Esta checklist mede o segundo, não o primeiro.
@@ -17,7 +17,7 @@ V1 está pronto quando o loop `plan → act → verify` fecha **de ponta a ponta
 
 ## 1. E2E Acceptance — Suíte de Tarefas Reais
 
-Rodar **5–10 repos pequenos/reais** via `anamnesic exec`, sem tocar no meio.
+Rodar **5–10 repos pequenos/reais** via `chronokairo exec`, sem tocar no meio.
 
 ### Banco de tarefas (mínimo 5)
 
@@ -120,7 +120,7 @@ Tudo abaixo está **congelado** até v1.0.0 sair.
 
 Antes de declarar v1.0.0, usar o próprio Coder em:
 
-- [x] 1 tarefa real no próprio `anamnesic-coder` (correção em `model_resolver` e parsing de JSON em tool calls)
+- [x] 1 tarefa real no próprio `chronokairo-coder` (correção em `model_resolver` e parsing de JSON em tool calls)
 - [x] 1 tarefa real em repositório de teste E2E (bateria T1–T5)
 - [x] Registrar resultado no mesmo formato da seção 2 (`bench/results/e2e-20260823.md`)
 
@@ -137,7 +137,7 @@ Antes de declarar v1.0.0, usar o próprio Coder em:
 
 ## 8. Definition of Done (copiar para `GOAL.md`)
 
-> **Anamnesic Coder v1 is complete when it can autonomously inspect, plan, modify, and verify a real software repository using only local compute, producing a validated patch or safely rolling back when it cannot complete the task.**
+> **ChronoKairo Coder v1 is complete when it can autonomously inspect, plan, modify, and verify a real software repository using only local compute, producing a validated patch or safely rolling back when it cannot complete the task.**
 
 ---
 

@@ -64,7 +64,7 @@ pub struct AgentState {
     pub locked_paths: BTreeSet<String>,
     /// Local embedding engine for `memory_search` (lazily loads the GGUF model).
     pub embedder: crate::llm::embedder::Embedder,
-    /// Discovered skill packs (project `./skills` + user `~/.anamnesic/skills`).
+    /// Discovered skill packs (project `./skills` + user `~/.chronokairo/skills`).
     pub skills: crate::skills::SkillRegistry,
     /// Long-running detached commands (C9 background tasks) spawned this session.
     pub background: crate::tools::background::BackgroundTaskManager,
@@ -421,7 +421,7 @@ mod tests {
     use std::fs;
 
     fn temp_config(tag: &str) -> Config {
-        let base = std::env::temp_dir().join(format!("anamnesic-state-{tag}"));
+        let base = std::env::temp_dir().join(format!("chronokairo-state-{tag}"));
         let _ = fs::remove_dir_all(&base);
         Config {
             workspace_dir: base.join("workspace"),

@@ -238,7 +238,7 @@ fn truncate_chars(text: &str, max_bytes: usize) -> String {
 }
 
 fn web_ua() -> String {
-    format!("cki/{}", env!("CARGO_PKG_VERSION"))
+    format!("ckc/{}", env!("CARGO_PKG_VERSION"))
 }
 
 #[cfg(test)]

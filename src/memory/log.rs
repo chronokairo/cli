@@ -473,7 +473,7 @@ mod tests {
 
     fn temp_memory(tag: &str) -> LongTermMemory {
         let dir =
-            std::env::temp_dir().join(format!("anamnesic-memory-log-{tag}-{}", std::process::id()));
+            std::env::temp_dir().join(format!("chronokairo-memory-log-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         LongTermMemory::new(dir.join("memory.json")).unwrap()
     }

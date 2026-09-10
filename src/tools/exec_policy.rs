@@ -128,7 +128,7 @@ impl ExecPolicy {
 }
 
 pub fn default_path() -> PathBuf {
-    crate::config::home_dir().join(".anamnesic").join("exec_policy.toml")
+    crate::config::home_dir().join(".chronokairo").join("exec_policy.toml")
 }
 
 pub fn load_default() -> ExecPolicy { ExecPolicy::load(&default_path()).unwrap_or_default() }

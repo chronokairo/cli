@@ -2,7 +2,7 @@
 //!
 //! A *skill* is a Markdown file with optional YAML frontmatter that exposes a
 //! short `description` and optional `tools` allowlist. The agent discovers
-//! skills from two layers (project `./skills` and user `~/.anamnesic/skills`)
+//! skills from two layers (project `./skills` and user `~/.chronokairo/skills`)
 //! and injects the matched skill body into its context via the `load_skill`
 //! tool. Skills are passive context — they never run code.
 
@@ -151,12 +151,16 @@ impl SkillRegistry {
     }
 }
 
-/// Resolve the two default skill search directories: project `./skills` and the
-/// user-global `~/.anamnesic/skills`.
+/// Resolve default skill search directories: project `./skills` and the
+/// user-global `~/.chronokairo/skills` (plus legacy `~/.anamnesic/skills` if present).
 pub fn default_skill_dirs(workspace: &Path) -> Vec<PathBuf> {
     let mut dirs = vec![workspace.join("skills")];
     let home = crate::config::home_dir();
-    dirs.push(home.join(".anamnesic").join("skills"));
+    dirs.push(home.join(".chronokairo").join("skills"));
+    let legacy = home.join(".anamnesic").join("skills");
+    if legacy.is_dir() {
+        dirs.push(legacy);
+    }
     dirs
 }
 

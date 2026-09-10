@@ -92,7 +92,7 @@ impl McpClient {
             "protocolVersion": "2024-11-05",
             "capabilities": {},
             "clientInfo": {
-                "name": "cki",
+                "name": "ckc",
                 "version": "0.1.0"
             }
         });
@@ -193,11 +193,11 @@ mod tests {
     }
 
     /// Minimal JSON-RPC MCP server used as a subprocess by agent-loop tests.
-    /// It is a no-op unless spawned with `ANAMNESIC_FAKE_MCP_SERVER=1` and the
+    /// It is a no-op unless spawned with `CHRONOKAIRO_FAKE_MCP_SERVER=1` and the
     /// `--exact` filter, so normal test runs never block here.
     #[test]
     fn fake_mcp_server_process() {
-        if std::env::var("ANAMNESIC_FAKE_MCP_SERVER").as_deref() != Ok("1") {
+        if std::env::var("CHRONOKAIRO_FAKE_MCP_SERVER").as_deref() != Ok("1") {
             return;
         }
         use std::io::{BufRead, Write};

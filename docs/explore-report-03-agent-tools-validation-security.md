@@ -35,7 +35,7 @@
 
 - `Config` (`:78`): policies `write_tool_policy`/`command_tool_policy` (Ask/Allow/Deny), `allowed_commands` — head entry is literally `"*"` (`:151-152`, making the rest redundant), `blocked_commands` (`:189-197`) = `rm -rf, sudo, reboot, shutdown, format, del /f, rd /s`, `denial_message` (`:20-28`).
 - `path_allowlist`, `path_denylist`, `block_workspace_escape` (C1), `adversarial_verification`, `max_retries`, `context_compact_threshold`, `summarizer_model`, `mcp_servers`.
-- Global settings `~/.anamnesic/settings.json` (Claude-style).
+- Global settings `~/.chronokairo/settings.json` (Claude-style).
 
 ## 5. Security posture
 

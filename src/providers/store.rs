@@ -30,7 +30,7 @@ pub struct ProviderStore {
 }
 
 impl ProviderStore {
-    /// Load from `~/.anamnesic/providers.toml`.
+    /// Load from `~/.chronokairo/providers.toml`.
     /// Returns empty store if file doesn't exist yet.
     pub fn load() -> Self {
         Self::load_inner().unwrap_or_default()
@@ -158,7 +158,7 @@ impl ProviderStore {
     pub fn config_path_display() -> String {
         config_path()
             .map(|p| p.display().to_string())
-            .unwrap_or_else(|_| "~/.anamnesic/providers.toml".into())
+            .unwrap_or_else(|_| "~/.chronokairo/providers.toml".into())
     }
 
     /// Scan the current environment (plus an optional .env file) for known
@@ -247,15 +247,22 @@ impl ProviderStore {
 
 fn config_path() -> Result<PathBuf> {
     let home = crate::config::home_dir();
-    Ok(home.join(".anamnesic").join("providers.toml"))
+    let primary = home.join(".chronokairo").join("providers.toml");
+    if !primary.exists() {
+        let legacy = home.join(".anamnesic").join("providers.toml");
+        if legacy.exists() {
+            return Ok(legacy);
+        }
+    }
+    Ok(primary)
 }
 
 /// Build a merged env-var map: real process environment → global settings
-/// (`~/.anamnesic/settings.json`) → `.env` file (earlier sources win).
+/// (`~/.chronokairo/settings.json`) → `.env` file (earlier sources win).
 pub(crate) fn load_env_with_dotenv() -> HashMap<String, String> {
     let mut map: HashMap<String, String> = std::env::vars().collect();
 
-    // Global settings (`~/.anamnesic/settings.json`): process env wins.
+    // Global settings (`~/.chronokairo/settings.json`): process env wins.
     for (k, v) in crate::config::GlobalSettings::load().env {
         map.entry(k).or_insert(v);
     }
@@ -301,7 +308,7 @@ pub(crate) fn load_env_with_dotenv() -> HashMap<String, String> {
     map
 }
 
-/// Load global settings (`~/.anamnesic/settings.json`) and `.env` (cwd + parent
+/// Load global settings (`~/.chronokairo/settings.json`) and `.env` (cwd + parent
 /// dirs) into the process environment so cloud keys and model overrides (e.g.
 /// `NVIDIA_API_KEY`, `CODER_MODEL`) are visible to `std::env::var` everywhere.
 /// Existing vars are not overridden (dotenv convention).
@@ -490,12 +497,12 @@ mod tests {
     fn config_path_uses_home() {
         let prev = std::env::var_os("HOME");
         let prev_up = std::env::var_os("USERPROFILE");
-        std::env::set_var("HOME", "/tmp/anamnesic-store-test");
+        std::env::set_var("HOME", "/tmp/chronokairo-store-test");
         std::env::remove_var("USERPROFILE");
         let p = config_path().unwrap();
         assert_eq!(
             p,
-            PathBuf::from("/tmp/anamnesic-store-test/.anamnesic/providers.toml")
+            PathBuf::from("/tmp/chronokairo-store-test/.chronokairo/providers.toml")
         );
         match prev {
             Some(v) => std::env::set_var("HOME", v),

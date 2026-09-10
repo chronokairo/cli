@@ -58,7 +58,7 @@ impl CkiLogger {
         }
     }
 
-    /// Initialize logger to append to a file (e.g. `anamnesic.log`) with the given maximum log level.
+    /// Initialize logger to append to a file (e.g. `chronokairo.log`) with the given maximum log level.
     pub fn init_file<P: AsRef<Path>>(path: P, level: Level) -> std::io::Result<()> {
         let file = OpenOptions::new()
             .create(true)

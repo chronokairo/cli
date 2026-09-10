@@ -282,7 +282,7 @@ fn patch_dry_run(workspace: &Path, params: &Value) -> Result<Value, String> {
 }
 
 fn backup_directory() -> PathBuf {
-    crate::config::home_dir().join(".anamnesic").join("patch-backups")
+    crate::config::home_dir().join(".chronokairo").join("patch-backups")
 }
 
 fn patch_commit(workspace: &Path, params: &Value, backup: bool) -> Result<Value, String> {
@@ -424,10 +424,14 @@ fn file_watch_snapshot(workspace: &Path, params: &Value) -> Result<Value, String
 }
 
 fn memory() -> Result<crate::memory::log::LongTermMemory, String> {
-    crate::memory::log::LongTermMemory::new(
-        crate::config::home_dir().join(".anamnesic").join("memory.db"),
-    )
-    .map_err(|error| error.to_string())
+    let home = crate::config::home_dir();
+    let primary = home.join(".chronokairo").join("memory.db");
+    let path = if !primary.exists() && home.join(".anamnesic").join("memory.db").exists() {
+        home.join(".anamnesic").join("memory.db")
+    } else {
+        primary
+    };
+    crate::memory::log::LongTermMemory::new(path).map_err(|error| error.to_string())
 }
 
 fn skills(workspace: &Path) -> Result<Value, String> {

@@ -534,7 +534,7 @@ mod tests {
             .unwrap_or(std::path::Path::new("/"))
             .to_path_buf();
         cfg.path_allowlist.push(outside.display().to_string());
-        let target = outside.join("anamnesic_bash_subdir");
+        let target = outside.join("chronokairo_bash_subdir");
         assert!(is_allowed(&format!("mkdir {}", target.display()), &cfg));
     }
 }

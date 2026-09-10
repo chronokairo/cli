@@ -26,7 +26,7 @@ Gap analysis (`docs/gap-analysis-2026-08.md`) against Claude Code, Codex, Antigr
 - Results collected in order, aggregated into one tool output.
 
 **C4. Skills system** (`src/skills/mod.rs`, `src/agent/state.rs`, `src/agent/agent_loop.rs`)  
-- Skills = Markdown files with optional YAML frontmatter (`name`, `description`) in `./skills` (project) and `~/.anamnesic/skills` (user).
+- Skills = Markdown files with optional YAML frontmatter (`name`, `description`) in `./skills` (project) and `~/.chronokairo/skills` (user).
 - `list_skills` and `load_skill(name)` tools for discovery and context injection.
 - Project skills take precedence over user skills on name collision.
 

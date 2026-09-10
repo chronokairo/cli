@@ -247,7 +247,7 @@ mod tests {
 
     #[test]
     fn walk_files_collects_relative_paths_and_skips_git() {
-        let root = std::env::temp_dir().join(format!("anamnesic-walk-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("chronokairo-walk-{}", std::process::id()));
         let sub = root.join("src");
         std::fs::create_dir_all(sub.join(".git")).unwrap();
         std::fs::create_dir_all(root.join(".git")).unwrap();

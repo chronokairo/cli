@@ -46,7 +46,7 @@ Record the vision-vs-codebase gap status as of 2026-08-08 and accept the followi
 | Complexity estimation / confidence scoring | ❌ |
 | Per-task observability metrics (route, model, latency, validation, files_changed) | ❌ |
 | Minimal-diff enforcement / regression detection | ❌ |
-| Granular MCP capability tools (`anamnesic.context`, `search`, `memory`, `review`, `validate`, `escalate`) | ❌ (only `run_coder`) |
+| Granular MCP capability tools (`chronokairo.context`, `search`, `memory`, `review`, `validate`, `escalate`) | ❌ (only `run_coder`) |
 | vLLM / llama.cpp-server integration | ❌ |
 | A2A interoperability | ❌ (deferred per vision) |
 

@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use crate::error::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-/// Global user settings stored at `~/.anamnesic/settings.json`.
+/// Global user settings stored at `~/.chronokairo/settings.json`.
 ///
 /// Follows Claude Code's `~/.claude/settings.json` convention: a single JSON
 /// file whose top-level `env` block holds API keys and other environment
@@ -29,9 +29,16 @@ pub struct GlobalSettings {
 }
 
 impl GlobalSettings {
-    /// Resolve the global settings file path: `~/.anamnesic/settings.json`.
+    /// Resolve the global settings file path: `~/.chronokairo/settings.json` (fallback `~/.anamnesic/settings.json`).
     pub fn path() -> PathBuf {
-        home_dir().join(".anamnesic").join("settings.json")
+        let primary = home_dir().join(".chronokairo").join("settings.json");
+        if !primary.exists() {
+            let legacy = home_dir().join(".anamnesic").join("settings.json");
+            if legacy.exists() {
+                return legacy;
+            }
+        }
+        primary
     }
 
     /// Load the global settings; returns an empty struct if the file is absent
@@ -50,7 +57,7 @@ impl GlobalSettings {
         serde_json::from_str(&text).context("parsing settings.json")
     }
 
-    /// Persist the settings file, creating `~/.anamnesic` if needed.
+    /// Persist the settings file, creating `~/.chronokairo` if needed.
     pub fn save(&self) -> Result<()> {
         let path = Self::path();
         if let Some(parent) = path.parent() {
@@ -100,7 +107,7 @@ pub(crate) struct TestHome { previous: Option<PathBuf> }
 #[cfg(test)]
 impl TestHome {
     pub(crate) fn new() -> Self {
-        let path = std::env::temp_dir().join(format!("cki-test-home-{}-{:016x}", std::process::id(), crate::random::system_u64().unwrap()));
+        let path = std::env::temp_dir().join(format!("ckc-test-home-{}-{:016x}", std::process::id(), crate::random::system_u64().unwrap()));
         std::fs::create_dir_all(&path).unwrap();
         let previous = TEST_HOME.with(|home| home.replace(Some(path)));
         Self { previous }
@@ -122,7 +129,7 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap();
         let prev_home = std::env::var_os("HOME");
         let prev_up = std::env::var_os("USERPROFILE");
-        let tmp = std::env::temp_dir().join(format!("anamnesic-globals-{}", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("chronokairo-globals-{}", std::process::id()));
         std::env::set_var("HOME", &tmp);
         std::env::remove_var("USERPROFILE");
 
@@ -142,7 +149,7 @@ mod tests {
             .unwrap()
             .to_string_lossy();
         assert!(
-            parent_name.contains("anamnesic"),
+            parent_name.contains("chronokairo"),
             "unexpected parent {parent_name}"
         );
 

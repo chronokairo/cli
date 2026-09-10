@@ -15,15 +15,15 @@
 
 **O que NÃO entra no V1** (pra não repetir o padrão de escopo inflado):
 - Múltiplos providers/fallback complexo além do que já existe (NIM → Ollama já é suficiente).
-- Memória persistente entre sessões (isso é o `anamnesic-context`, fora de escopo aqui).
+- Memória persistente entre sessões (isso é o `chronokairo-context`, fora de escopo aqui).
 - UI, dashboard, qualquer coisa visual.
 - Suporte a múltiplas linguagens de propósito geral — escolha uma (a que você mais usa: Rust, Go ou TS) e faça funcionar bem antes de generalizar.
 - Qualquer tarefa que exija mais de ~3-4 arquivos de contexto simultâneo — se não cabe no budget, a tarefa está fora do escopo do V1, não é motivo pra aumentar o context window.
 
 **Critério de "pronto" (binário, testável):**
-Pegue 5 tarefas reais que você resolveria manualmente essa semana (Chronokairo ou `anamnesic-*`), rode todas pelo coder sem ajuda, e meça: quantas terminaram com diff aplicável e correto, sem você precisar terminar a tarefa manualmente. Se ≥3 de 5 passarem, você tem um V1 de verdade — não porque bateu uma spec, mas porque resolveu trabalho seu.
+Pegue 5 tarefas reais que você resolveria manualmente essa semana (Chronokairo ou `chronokairo-*`), rode todas pelo coder sem ajuda, e meça: quantas terminaram com diff aplicável e correto, sem você precisar terminar a tarefa manualmente. Se ≥3 de 5 passarem, você tem um V1 de verdade — não porque bateu uma spec, mas porque resolveu trabalho seu.
 
-O **goal do Anamnesic Coder v1** deve ser bem estreito:
+O **goal do ChronoKairo Coder v1** deve ser bem estreito:
 
 > **Transformar uma tarefa de desenvolvimento em uma mudança de código validada localmente, com o mínimo de intervenção humana.**
 
@@ -64,7 +64,7 @@ Eu definiria o escopo funcional assim:
 
 A definição de **DONE** poderia ser:
 
-> Dado um repositório existente e uma tarefa bem definida, o Anamnesic Coder consegue produzir autonomamente um patch correto e demonstrar, por testes, build, lint ou outro critério verificável, que a tarefa foi cumprida.
+> Dado um repositório existente e uma tarefa bem definida, o ChronoKairo Coder consegue produzir autonomamente um patch correto e demonstrar, por testes, build, lint ou outro critério verificável, que a tarefa foi cumprida.
 
 E eu excluiria explicitamente do v1: interface SaaS, colaboração em equipe, memória de longo prazo, agentes especializados, geração automática de PRs, browser automation, execução distribuída, cloud obrigatória, fine-tuning e suporte perfeito a todas as linguagens.
 

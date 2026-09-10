@@ -6,4 +6,4 @@ This directory contains configuration-related modules.
 
 - `mod.rs` - Module definition for config
 - `settings.rs` - Settings handling
-- `global_settings.rs` - Global user settings (`~/.anamnesic/settings.json`, Claude-style `env` block)
+- `global_settings.rs` - Global user settings (`~/.chronokairo/settings.json`, Claude-style `env` block)

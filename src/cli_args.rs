@@ -21,7 +21,7 @@ pub(crate) struct Cli {
     pub(crate) resume: bool,
     /// Continue the most recent session for this workspace without prompting
     pub(crate) cont: bool,
-    /// Download the default embedding model (Qwen3-Embedding 0.6B Q8) into ~/.anamnesic/models for memory_search
+    /// Download the default embedding model (Qwen3-Embedding 0.6B Q8) into ~/.chronokairo/models for memory_search
     pub(crate) download_embedding_model: bool,
     pub(crate) task: Option<String>,
 }
@@ -39,7 +39,7 @@ pub(crate) enum Commands {
         /// Filter by name/family/provider (empty = show all)
         query: String,
     },
-    /// Configure and manage cloud provider API keys (stored securely at ~/.anamnesic/providers.toml)
+    /// Configure and manage cloud provider API keys (stored securely at ~/.chronokairo/providers.toml)
     Providers {
         action: ProvidersAction,
     },
@@ -184,7 +184,7 @@ fn help(command: &str) -> String {
         "context" => "[-t, --task <TASK>] [-b, --budget <CHARS>]\nDefault budget: 8000",
         _ => "",
     };
-    format!("ChronoKairo CLI (CKI)\n\nUsage: cki {}{}\n\n  -h, --help  Print help\n", if command.is_empty() { String::new() } else { format!("{command} ") }, usage)
+    format!("ChronoKairo CLI (CKC)\n\nUsage: ckc {}{}\n\n  -h, --help  Print help\n", if command.is_empty() { String::new() } else { format!("{command} ") }, usage)
 }
 fn scan(args: &mut VecDeque<OsString>, specs: &[(&str, &str, bool)], command: &str, root: bool) -> Parsed<Options> {
     let mut parsed = Options::default();

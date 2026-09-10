@@ -9,7 +9,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 if (-not $Bin) {
-    $Bin = Join-Path $PSScriptRoot "..\target\debug\anamnesic.exe"
+    $Bin = Join-Path $PSScriptRoot "..\target\debug\ckc.exe"
 }
 # Never benchmark against a stale binary.
 Push-Location (Join-Path $PSScriptRoot "..")
@@ -18,7 +18,7 @@ if ($LASTEXITCODE -ne 0) { Pop-Location; throw "cargo build failed" }
 Pop-Location
 $fixtures = Join-Path $PSScriptRoot "tests"
 $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
-$root = Join-Path $env:TEMP "anamnesic-hbench-$stamp"
+$root = Join-Path $env:TEMP "chronokairo-hbench-$stamp"
 New-Item -ItemType Directory -Force -Path $root | Out-Null
 $logDir = Join-Path $PSScriptRoot "logs"
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null

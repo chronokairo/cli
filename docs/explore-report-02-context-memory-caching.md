@@ -52,7 +52,7 @@ Persistent store for sessions, transcripts, decisions, and vector embeddings wit
 
 ## 4. `src/llm/embedder.rs` (245 lines) — vector embeddings
 
-- Local GGUF embedding engine (`Qwen3-Embedding-0.6B-Q8_0.gguf` default, Jina v5 fallback), `EmbedKind { Query, Passage }` prefixes, last-token pooling + L2 normalization. Model in `~/.anamnesic/models/embeddings/`; `--download-embedding-model` CLI flag.
+- Local GGUF embedding engine (`Qwen3-Embedding-0.6B-Q8_0.gguf` default, Jina v5 fallback), `EmbedKind { Query, Passage }` prefixes, last-token pooling + L2 normalization. Model in `~/.chronokairo/models/embeddings/`; `--download-embedding-model` CLI flag.
 - Feeds `memory_search` → `search_vectors`. Auto-indexing `AgentState::index_persisted_records` (`state.rs:263-291`) embeds assistant messages (16–2,000 chars only), gated by `MEMORY_INDEXING` env, **default OFF** (`settings.rs:230`).
 - **Gaps:** brute-force linear search (no ANN/HNSW/`vec0`); no embedding cache/dedup (re-embeds every persist); only assistant messages indexed (no user tasks, tool results, file content); no per-file/per-chunk code embeddings.
 

@@ -4,7 +4,7 @@ O ponto principal agora é separar duas coisas:
 
 **“todos os componentes existem”** de **“o produto cumpre o goal em uso real”**.
 
-Seu relatório prova muito bem a primeira. Para eu declarar **Anamnesic Coder v1.0**, eu faria só uma última bateria de **end-to-end acceptance tests**.
+Seu relatório prova muito bem a primeira. Para eu declarar **ChronoKairo Coder v1.0**, eu faria só uma última bateria de **end-to-end acceptance tests**.
 
 ### O que ainda precisa provar
 
@@ -67,7 +67,7 @@ Primeiro transforme esse audit técnico em evidência experimental.
 
 Eu colocaria no `GOAL.md`:
 
-> **Anamnesic Coder v1 is complete when it can autonomously inspect, plan, modify, and verify a real software repository using only local compute, producing a validated patch or safely rolling back when it cannot complete the task.**
+> **ChronoKairo Coder v1 is complete when it can autonomously inspect, plan, modify, and verify a real software repository using only local compute, producing a validated patch or safely rolling back when it cannot complete the task.**
 
 E a release gate:
 
@@ -89,7 +89,7 @@ Ou seja: pelo que você mostrou, eu **não desenvolveria mais features no Coder 
 
 Eu faria agora **benchmark → dogfooding → bugs → release `v1.0.0`**.
 
-Se ele passar nesses testes reais, pode considerar o **Anamnesic Coder terminado** e partir para o próximo componente da org.
+Se ele passar nesses testes reais, pode considerar o **ChronoKairo Coder terminado** e partir para o próximo componente da org.
 
 Isso mostra que os *componentes* existem e passam nos testes deles — não mostra que o goal do V1 foi atingido. São coisas diferentes, e a diferença importa aqui especificamente porque foi você mesmo quem definiu o critério de pronto como comportamental, não estrutural.
 
@@ -108,7 +108,7 @@ Isso é exatamente o padrão que a gente conversou: documento de escopo bem escr
 
 **O que eu faria antes de declarar V1 fechado:**
 
-Pegue as 5 tarefas reais que sugeri (do seu próprio trabalho, Chronokairo ou `anamnesic-*`), rode via `anamnesic exec` de ponta a ponta, sem tocar no meio, e registre:
+Pegue as 5 tarefas reais que sugeri (do seu próprio trabalho, Chronokairo ou `chronokairo-*`), rode via `chronokairo exec` de ponta a ponta, sem tocar no meio, e registre:
 
 1. Quantas terminaram com diff aplicável e correto.
 2. Quantas precisaram de correção manual sua no meio (isso conta como falha do loop, mesmo que o resultado final esteja certo).

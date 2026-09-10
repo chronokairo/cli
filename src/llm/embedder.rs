@@ -9,7 +9,7 @@ use crate::llm::infer::model::Model;
 use crate::llm::infer::tokenizer::Tokenizer;
 
 /// Default embedding model file name placed under
-/// `~/.anamnesic/models/embeddings/`.
+/// `~/.chronokairo/models/embeddings/`.
 pub const EMBEDDING_DEFAULT: &str = "Qwen3-Embedding-0.6B-Q8_0.gguf";
 
 /// Candidate download sources, tried in order. Qwen3-Embedding 0.6B is the
@@ -62,7 +62,7 @@ impl Embedder {
     pub fn embed(&self, text: &str, kind: EmbedKind) -> Result<Vec<f32>> {
         let Some(source) = &self.source else {
             crate::error::bail!(
-                "no embedding model configured — run `anamnesic --download-embedding-model` once (stores the model in ~/.anamnesic/models)"
+                "no embedding model configured — run `ckc --download-embedding-model` once (stores the model in ~/.chronokairo/models)"
             );
         };
         let mut guard = self.engine.lock().unwrap();
@@ -95,40 +95,48 @@ impl Embedder {
     }
 }
 
-/// Global config models dir: `~/.anamnesic/models`. The embedding model lives
+/// Global config models dir: `~/.chronokairo/models`. The embedding model lives
 /// here (shared across every project) so workspaces stay free of multi-hundred
 /// MB blobs and the transaction snapshot never has to read them.
 pub fn global_models_dir() -> PathBuf {
-    crate::config::home_dir().join(".anamnesic").join("models")
+    crate::config::home_dir().join(".chronokairo").join("models")
 }
 
 /// Locate the embedding GGUF in the global config dir
-/// (`~/.anamnesic/models/embeddings/`): the first `.gguf` present, then the
-/// default filename. No per-project search.
+/// (`~/.chronokairo/models/embeddings/`): the first `.gguf` present, then the
+/// default filename. Also checks legacy `~/.anamnesic/models/embeddings/` if present.
 fn resolve_source() -> Option<PathBuf> {
-    let dir = global_models_dir().join("embeddings");
-    if let Ok(entries) = std::fs::read_dir(&dir) {
-        let mut gguf: Vec<PathBuf> = entries
-            .filter_map(|entry| entry.ok())
-            .map(|entry| entry.path())
-            .filter(|path| path.extension().is_some_and(|ext| ext == "gguf"))
-            .collect();
-        gguf.sort();
-        if let Some(first) = gguf.into_iter().next() {
-            return Some(first);
+    let candidate_dirs = [
+        global_models_dir().join("embeddings"),
+        crate::config::home_dir().join(".anamnesic").join("models").join("embeddings"),
+    ];
+    for dir in &candidate_dirs {
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            let mut gguf: Vec<PathBuf> = entries
+                .filter_map(|entry| entry.ok())
+                .map(|entry| entry.path())
+                .filter(|path| path.extension().is_some_and(|ext| ext == "gguf"))
+                .collect();
+            gguf.sort();
+            if let Some(first) = gguf.into_iter().next() {
+                return Some(first);
+            }
+        }
+        let default = dir.join(EMBEDDING_DEFAULT);
+        if default.exists() {
+            return Some(default);
         }
     }
-    let default = dir.join(EMBEDDING_DEFAULT);
-    default.exists().then_some(default)
+    None
 }
 
 /// Download the first available candidate embedding model into the global
-/// config dir (`~/.anamnesic/models/embeddings/`) and return its path.
+/// config dir (`~/.chronokairo/models/embeddings/`) and return its path.
 pub fn download_embedding_model() -> Result<PathBuf> {
     let dir = global_models_dir().join("embeddings");
     std::fs::create_dir_all(&dir)?;
     let client = crate::http::blocking::Client::builder()
-        .user_agent(format!("cki/{}", env!("CARGO_PKG_VERSION")))
+        .user_agent(format!("ckc/{}", env!("CARGO_PKG_VERSION")))
         .timeout(std::time::Duration::from_secs(120))
         .build()?;
     for url in EMBEDDING_CANDIDATES {
@@ -175,8 +183,8 @@ mod tests {
     fn resolve_source_uses_global_models_dir() {
         let _guard = ENV_LOCK.lock().unwrap();
         let tmp =
-            std::env::temp_dir().join(format!("anamnesic-embedder-global-{}", std::process::id()));
-        let dir = tmp.join(".anamnesic").join("models").join("embeddings");
+            std::env::temp_dir().join(format!("chronokairo-embedder-global-{}", std::process::id()));
+        let dir = tmp.join(".chronokairo").join("models").join("embeddings");
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("my-embed.gguf");
         std::fs::write(&file, b"not a real model").unwrap();
@@ -202,7 +210,7 @@ mod tests {
     fn resolve_source_returns_none_when_missing() {
         let _guard = ENV_LOCK.lock().unwrap();
         let tmp =
-            std::env::temp_dir().join(format!("anamnesic-embedder-none-{}", std::process::id()));
+            std::env::temp_dir().join(format!("chronokairo-embedder-none-{}", std::process::id()));
         let prev_home = std::env::var_os("HOME");
         let prev_up = std::env::var_os("USERPROFILE");
         std::env::set_var("HOME", &tmp);
@@ -222,7 +230,7 @@ mod tests {
     }
 
     /// End-to-end check of the real inference engine against the embedding
-    /// GGUF in `~/.anamnesic/models`. Skipped by default; run with
+    /// GGUF in `~/.chronokairo/models`. Skipped by default; run with
     /// `cargo test -- --ignored` after `--download-embedding-model`.
     #[test]
     #[ignore]

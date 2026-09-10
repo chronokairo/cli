@@ -48,7 +48,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 fn init_file_logger() -> crate::error::Result<()> {
-    logger::CkiLogger::init_file("anamnesic.log", logger::Level::Info)
+    logger::CkiLogger::init_file("chronokairo.log", logger::Level::Info)
         .map_err(|e| crate::error::anyhow!("{e}"))?;
     Ok(())
 }
@@ -631,7 +631,7 @@ async fn handle_providers(action: ProvidersAction) -> Result<()> {
                 store.set_base(&provider, &b);
             }
             store.save()?;
-            // Also persist into the global `~/.anamnesic/settings.json` env block
+            // Also persist into the global `~/.chronokairo/settings.json` env block
             // (Claude Code-style), so the key is available to every workspace.
             let env_name = catalog
                 .get(&provider)

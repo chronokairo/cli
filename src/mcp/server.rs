@@ -30,7 +30,7 @@ impl McpServer {
             serde_json::json!({
                 "protocolVersion": "2024-11-05",
                 "capabilities": {},
-                "serverInfo": {"name": "cki", "version": "0.1.0"}
+                "serverInfo": {"name": "ckc", "version": "0.1.0"}
             }),
         )?;
         self.write_notification("initialized", serde_json::json!({}))?;
@@ -56,7 +56,7 @@ impl McpServer {
                         "tools": [
                             {
                                 "name": "run_coder",
-                                "description": "Run a coding task with the Anamnesic agent. Returns the final result.",
+                                "description": "Run a coding task with the ChronoKairo agent. Returns the final result.",
                                 "inputSchema": {
                                     "type": "object",
                                     "properties": {
@@ -183,7 +183,7 @@ impl McpServer {
                     let result = serde_json::json!({
                         "protocolVersion": "2024-11-05",
                         "capabilities": {},
-                        "serverInfo": {"name": "cki", "version": "0.1.0"}
+                        "serverInfo": {"name": "ckc", "version": "0.1.0"}
                     });
                     self.write_response(id.unwrap_or(Value::Null), result)?;
                     self.write_notification("initialized", serde_json::json!({}))?;

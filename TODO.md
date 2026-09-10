@@ -1,4 +1,4 @@
-# TODO — Anamnesic Coder (August 2026)
+# TODO — ChronoKairo Coder (August 2026)
 
 ## P0 — Safety and Reliability (CRITICAL)
 
@@ -99,7 +99,7 @@
 ## P1 — Harness Gaps (competitive parity)
 
 ### ~~G5. Sub-Agent Support (Task tool)~~ ✅ DONE
-- **Gap:** O Anamnesic tem apenas um loop sequencial. Claude Code, Antigravity e Cursor suportam sub-agentes para delegação de tarefas e pesquisa paralela.
+- **Gap:** O ChronoKairo tem apenas um loop sequencial. Claude Code, Antigravity e Cursor suportam sub-agentes para delegação de tarefas e pesquisa paralela.
 - **Impact:** Tarefas complexas (multi-arquivo, refatoração) são lentas e gastam mais tokens.
 - **Files:** `src/agent/agent_loop.rs`, `src/agent/state.rs`
 - **Fix:** Implementado tool `task` que spawna um sub-agente em thread separada com `tokio::runtime::Runtime::new()`. O sub-agente usa `AgentState::clone()` (com `Clone` manual resetando retries/transaction/dirty), roda `run_agent_loop_with_hooks` em modo `Agent`, e retorna o resultado via `mpsc::channel` com timeout de 300s. `execute_tool` e `execute_tool_calls` atualizados para receber `&LlmRouter`. Registrado em `coding_tools()` com parâmetros `task` (required) e `model` (optional).
@@ -318,7 +318,7 @@ Recomendações da comparação com `codex-rs` (openai/codex). NÃO copiar o wor
 
 ### S5. Consistência de nomes (Codex usa nomes descritivos claros)
 - **Files:** `src/hw_recommend/`, `src/models_dev/`, `src/main.rs:84`
-- **Fix:** `hw_recommend` → `hardware`; `models_dev` → `catalog` (é um client do models.dev); alinhar `clap name = "slowcode"` com `anamnesic` (nome antigo residual).
+- **Fix:** `hw_recommend` → `hardware`; `models_dev` → `catalog` (é um client do models.dev); alinhar `clap name = "slowcode"` com `chronokairo` (nome antigo residual).
 
 ### S6. Testes de integração com mock provider
 - **Fix:** O Codex usa `wiremock` + crates de `test-support`. É a única lacuna de infra real do harness. Duplicado do item aberto "Integration tests with mock provider".
@@ -328,7 +328,7 @@ Recomendações da comparação com `codex-rs` (openai/codex). NÃO copiar o wor
 ## Roadmap — Competitive Backlog (2026-08-06)
 
 > Fonte: comparação com Claude Code / Codex / Antigravity / Cursor / Aider (ver `docs/gap-analysis-2026-08.md`).
-> Entregues nesta rodada: cost em US$ (G6), web tools (G13), lint gate (G12), todo tool, memória vetorial, global settings (`~/.anamnesic/settings.json`), snapshot respeitando `.gitignore`.
+> Entregues nesta rodada: cost em US$ (G6), web tools (G13), lint gate (G12), todo tool, memória vetorial, global settings (`~/.chronokairo/settings.json`), snapshot respeitando `.gitignore`.
 
 ### Implementar (novos gaps)
 
@@ -492,7 +492,7 @@ O código atual é um harness completo e funcional, mas várias capacidades da v
 | Lint gate (`cargo clippy` pós-mutação) (G12) | ✅ Done | — |
 | TODO tracking tool (`todo`) | ✅ Done | — |
 | Memória vetorial/semântica local (`memory_search`, embeddings) | ✅ Done | — |
-| Global settings (`~/.anamnesic/settings.json`, Claude-style) | ✅ Done | — |
+| Global settings (`~/.chronokairo/settings.json`, Claude-style) | ✅ Done | — |
 | Snapshot respeita `.gitignore` + guard de tempo | ✅ Done | — |
 | Prompts versioned/tested | ✅ Done | — |
 | Status/WARN messages to fixed status bar (no chat leak) | ✅ Done | UI |

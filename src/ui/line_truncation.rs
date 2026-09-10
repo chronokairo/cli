@@ -91,7 +91,7 @@ mod tests {
     use super::*;
     use crate::ui::engine::{Color, Style};
 
-    fn line(text: &str) -> Line {
+    fn line(text: &str) -> Line<'_> {
         Line::from(text.to_string())
     }
 

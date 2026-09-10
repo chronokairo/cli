@@ -112,7 +112,7 @@ impl AppServer {
                             "streaming": "v1",
                             "interrupt": "v1"
                         },
-                        "serverInfo": {"name": "chronokairo", "version": env!("CARGO_PKG_VERSION")}
+                        "serverInfo": {"name": "ckc", "version": env!("CARGO_PKG_VERSION")}
                     });
                     self.write_response(request.id, Some(result), None)?;
                 }

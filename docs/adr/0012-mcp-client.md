@@ -6,7 +6,7 @@
 
 ## Context
 
-The Anamnesic agent has a fixed set of 12 built-in tools. All 2026 leaders (Claude Code, Antigravity, Cursor, Codex) support the Model Context Protocol (MCP) to dynamically load tools from external servers (GitHub, databases, Jira, etc.). Without MCP, Anamnesic cannot extend its toolset without code changes.
+The ChronoKairo agent has a fixed set of 12 built-in tools. All 2026 leaders (Claude Code, Antigravity, Cursor, Codex) support the Model Context Protocol (MCP) to dynamically load tools from external servers (GitHub, databases, Jira, etc.). Without MCP, ChronoKairo cannot extend its toolset without code changes.
 
 ## Decision
 

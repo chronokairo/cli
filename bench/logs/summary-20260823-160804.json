@@ -4,20 +4,20 @@
     "Model": "deepseek-v4-flash:cloud",
     "Status": "FAIL",
     "ExitCode": 0,
-    "Log": "C:\\Users\\luann\\Documents\\GitHub\\anamnesic-coder\\bench\\logs\\h1-orders-20260823-160804.log"
+    "Log": "C:\\Users\\luann\\Documents\\GitHub\\chronokairo-coder\\bench\\logs\\h1-orders-20260823-160804.log"
   },
   {
     "Task": "h2-users",
     "Model": "deepseek-v4-flash:cloud",
     "Status": "FAIL",
     "ExitCode": 0,
-    "Log": "C:\\Users\\luann\\Documents\\GitHub\\anamnesic-coder\\bench\\logs\\h2-users-20260823-160804.log"
+    "Log": "C:\\Users\\luann\\Documents\\GitHub\\chronokairo-coder\\bench\\logs\\h2-users-20260823-160804.log"
   },
   {
     "Task": "h3-pool",
     "Model": "deepseek-v4-flash:cloud",
     "Status": "FAIL",
     "ExitCode": 0,
-    "Log": "C:\\Users\\luann\\Documents\\GitHub\\anamnesic-coder\\bench\\logs\\h3-pool-20260823-160804.log"
+    "Log": "C:\\Users\\luann\\Documents\\GitHub\\chronokairo-coder\\bench\\logs\\h3-pool-20260823-160804.log"
   }
 ]

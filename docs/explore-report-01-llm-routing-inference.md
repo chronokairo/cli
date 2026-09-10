@@ -77,7 +77,7 @@ Lazily-loaded local GGUF embedding engine (Qwen3-Embedding 0.6B Q8 default, Jina
 
 ## 11. `src/providers/` — credential store & verification
 
-- `store.rs` (421): TOML-backed provider credentials (`~/.anamnesic/providers.toml`, chmod 600), env/.env discovery, base-URL + API-key resolution.
+- `store.rs` (421): TOML-backed provider credentials (`~/.chronokairo/providers.toml`, chmod 600), env/.env discovery, base-URL + API-key resolution.
 - `verify.rs` (57): `test_provider` via `GET {base}/models`, distinguishing 401/403/other. Default base list is a stub.
 
 ## 12. `src/models_dev/` — the pricing catalog

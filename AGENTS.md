@@ -4,7 +4,7 @@ This file lists all the index.md files created in the src directory and its subd
 
 ## Architecture Design Pattern (Binding — August 2026)
 
-The Anamnesic harness follows a layered architecture derived from the union of three leading 2026-era coding agent architectures:
+The ChronoKairo harness follows a layered architecture derived from the union of three leading 2026-era coding agent architectures:
 
 | Layer | Reference Harness | Core Abstraction |
 |-------|-------------------|------------------|
@@ -12,7 +12,7 @@ The Anamnesic harness follows a layered architecture derived from the union of t
 | **Loop Layer** | Claude Code | Pure while-loop orchestration with 7-phase pipeline per tool call: validate → pre-hooks → permission → execute → post-hooks → concurrency scheduler → context update. Typed state machine (`ToolLoopOutcome`, `VerificationAction`). |
 | **Core↔UI Decoupling** | Codex CLI | Queue-pair protocol: `Op` (client→core) / `EventMsg` (core→client) over async channels. Core runs as `Session { submit(Op), next_event() }`. UI/headless/app-server/MCP-server are consumers of the same event stream. |
 | **State Layer** | OpenHands V1 | Append-only typed event log as single source of truth. `ActionEvent`/`ObservationEvent` replace `(role,content)` vectors. Deterministic replay, pause/resume, condenser. (Incremental adoption; current `(role,content)` history persists alongside.) |
-| **Transactional Layer** | Anamnesic (unique) | Per-turn workspace snapshot → diff → rollback/keep. Verification gate after mutations with repair budget. |
+| **Transactional Layer** | ChronoKairo (unique) | Per-turn workspace snapshot → diff → rollback/keep. Verification gate after mutations with repair budget. |
 
 ### Module Target Layout (Refactoring Goal)
 
@@ -100,6 +100,7 @@ Each index.md file contains a list of files in that directory with brief descrip
 - [`docs/adr/0017-specification-locked-execution.md`](docs/adr/0017-specification-locked-execution.md) — Specification-Locked Execution (v0.9.5)
 - [`docs/adr/0018-versioned-h-battery-and-tool-resilience.md`](docs/adr/0018-versioned-h-battery-and-tool-resilience.md) — Versioned H-Battery & Resilient Tool Protocol (v0.9.5)
 - [`docs/adr/0019-provider-native-model-catalog.md`](docs/adr/0019-provider-native-model-catalog.md) — Provider-Native Model Catalog
+- [`docs/adr/0020-rebrand-chronokairo-ckc.md`](docs/adr/0020-rebrand-chronokairo-ckc.md) — ChronoKairo Rebranding and CKC Binary Transition
 - [`docs/gap-analysis-2026-08.md`](docs/gap-analysis-2026-08.md) — 2026 Competitor Gap Analysis Report
 - [`docs/gap-analysis-vision-2026-08.md`](docs/gap-analysis-vision-2026-08.md) — Vision vs. Codebase Gap Analysis (synthesis)
 - [`docs/explore-report-01-llm-routing-inference.md`](docs/explore-report-01-llm-routing-inference.md) — Explore report: LLM routing & local inference layer

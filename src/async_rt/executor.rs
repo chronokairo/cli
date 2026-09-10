@@ -1,7 +1,6 @@
 //! Pure standard-library async executor with thread-parking waker.
 
 use std::future::Future;
-use std::pin::Pin;
 use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 use std::thread::{self, Thread};
 

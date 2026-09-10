@@ -48,7 +48,7 @@ impl Client {
     pub fn new() -> Self {
         Self {
             timeout: Duration::from_secs(60),
-            user_agent: Some(format!("cki/{}", env!("CARGO_PKG_VERSION"))),
+            user_agent: Some(format!("ckc/{}", env!("CARGO_PKG_VERSION"))),
         }
     }
 

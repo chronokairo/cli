@@ -8,7 +8,7 @@
 use crate::ui::engine::{Color, Line, Span, Style};
 
 /// Style a single unified-diff line.
-fn style_diff_line(line: &str) -> Span {
+fn style_diff_line(line: &str) -> Span<'_> {
     if line.starts_with("@@") {
         Span::styled(
             line.to_string(),
@@ -34,7 +34,7 @@ fn style_diff_line(line: &str) -> Span {
 }
 
 /// Convert unified diff text into styled lines for a pager.
-pub fn diff_lines(diff_text: &str) -> Vec<Line> {
+pub fn diff_lines(diff_text: &str) -> Vec<Line<'_>> {
     diff_text
         .lines()
         .map(|line| Line::from(style_diff_line(line)))

@@ -47,7 +47,7 @@ This kills H1/H2/H3-style drift *before* `cargo check`, let alone `cargo test`.
 
 ### 3. The model never writes its own exam
 
-When the contract contains explicit API material, one LLM call synthesizes an **acceptance oracle** (integration test file under `tests/anamnesic_oracle_<nanos>.rs`) *before implementation starts*. The file is:
+When the contract contains explicit API material, one LLM call synthesizes an **acceptance oracle** (integration test file under `tests/chronokairo_oracle_<nanos>.rs`) *before implementation starts*. The file is:
 
 - written inside the turn transaction (rollback cleans it up);
 - registered in `state.locked_paths`;

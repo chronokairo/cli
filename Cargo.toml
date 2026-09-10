@@ -1,11 +1,11 @@
 [package]
-name = "cki"
+name = "ckc"
 version = "0.1.0"
 edition = "2021"
-description = "ChronoKairo CLI (CKI) — Zero-Lib coding agent & context harness"
+description = "ChronoKairo CLI (CKC) — Zero-Lib coding agent & context harness"
 
 [[bin]]
-name = "cki"
+name = "ckc"
 path = "src/main.rs"
 
 [features]

@@ -141,7 +141,7 @@ pub struct BaselineEntry {
 /// Locked acceptance-oracle test file produced before implementation starts.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AcceptanceOracle {
-    /// Workspace-relative path, e.g. `tests/anamnesic_oracle_1730000000.rs`.
+    /// Workspace-relative path, e.g. `tests/chronokairo_oracle_1730000000.rs`.
     pub path: String,
     pub content: String,
 }
@@ -955,7 +955,7 @@ fn lock_acceptance_oracle<'a>(
         let lib_rs = spec.lib_rs.clone();
         let import_hints = build_import_hints(state, spec);
         let path = format!(
-            "tests/anamnesic_oracle_{}",
+            "tests/chronokairo_oracle_{}",
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_nanos())
@@ -1083,10 +1083,10 @@ fn oracle_authoring_bugs(
         if !is_diag {
             continue;
         }
-        let hits_oracle = line.contains("anamnesic_oracle") || {
+        let hits_oracle = line.contains("chronokairo_oracle") || {
             // short format: `path:line:col: error...` — check path part only
             line.split_once(": error")
-                .map(|(loc, _)| loc.contains("anamnesic_oracle"))
+                .map(|(loc, _)| loc.contains("chronokairo_oracle"))
                 .unwrap_or(false)
         };
         if !hits_oracle {
@@ -1148,7 +1148,7 @@ async fn generate_acceptance_oracle(
         None => String::new(),
     };
     let prompt = format!(
-        "You are an acceptance-test compiler. Write ONE complete Rust integration test file that will be saved as `tests/anamnesic_oracle.rs`.\n\
+        "You are an acceptance-test compiler. Write ONE complete Rust integration test file that will be saved as `tests/chronokairo_oracle.rs`.\n\
          Rules:\n\
          1. Test EXACTLY the API specified below — exact function names, parameter types, parameter placement and return types.\n\
          2. Encode every behavioral requirement as a test (preconditions, valid/invalid state transitions, postconditions).\n\
@@ -1395,13 +1395,13 @@ impl User {
     fn oracle_directive_mentions_lock() {
         let mut spec = TaskSpec::from_task("tarefa");
         spec.oracle = Some(AcceptanceOracle {
-            path: "tests/anamnesic_oracle_1.rs".into(),
+            path: "tests/chronokairo_oracle_1.rs".into(),
             content: "#[test] fn t() {}".into(),
         });
-        assert!(spec.locks_path("tests\\anamnesic_oracle_1.rs"));
+        assert!(spec.locks_path("tests\\chronokairo_oracle_1.rs"));
         assert!(!spec.locks_path("src/lib.rs"));
         let d = spec.oracle_repair_directive();
-        assert!(d.contains("tests/anamnesic_oracle_1.rs"));
+        assert!(d.contains("tests/chronokairo_oracle_1.rs"));
         assert!(d.to_lowercase().contains("locked"));
     }
 

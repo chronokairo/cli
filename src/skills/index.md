@@ -4,7 +4,7 @@ This directory contains the skills system — reusable instruction packs the age
 
 ## Files
 
-- `mod.rs` — Skill parsing (`Skill`, `SymbolIndex`), discovery (`./skills` + `~/.anamnesic/skills`), and registry (`SkillRegistry`).
+- `mod.rs` — Skill parsing (`Skill`, `SymbolIndex`), discovery (`./skills` + `~/.chronokairo/skills`), and registry (`SkillRegistry`).
 - `index.md` — This file.
 
 ## Usage

@@ -1,13 +1,13 @@
 # Vision vs. Codebase — Gap Analysis (2026-08-08)
 
-> Comparison of the Anamnesic Coder product vision (README/vision document) against the actual codebase.
+> Comparison of the ChronoKairo Coder product vision (README/vision document) against the actual codebase.
 > Raw inventories: `docs/explore-report-01-llm-routing-inference.md`, `docs/explore-report-02-context-memory-caching.md`, `docs/explore-report-03-agent-tools-validation-security.md`.
 > Logged as ADR 0016.
 
 ## Big picture
 
 - **`src/repo/context.rs` is 0 bytes** — the vision's "Context Engine / minimal context selection" does not exist yet.
-- The current product is a **complete standalone harness** (own agent loop, TUI, exec, plan mode, sub-agents). The vision describes a harness-agnostic optimization *layer* exposing granular `anamnesic.*` MCP tools. Today only `run_coder` (the whole harness) is exposed — no `anamnesic.context`, `search`, `memory`, `review`, `validate`, `escalate` tools.
+- The current product is a **complete standalone harness** (own agent loop, TUI, exec, plan mode, sub-agents). The vision describes a harness-agnostic optimization *layer* exposing granular `chronokairo.*` MCP tools. Today only `run_coder` (the whole harness) is exposed — no `chronokairo.context`, `search`, `memory`, `review`, `validate`, `escalate` tools.
 - The in-progress (uncommitted) work implements most of the AGENTS.md migration checklist: `protocol` (Op/EventMsg/Session), `app_server` (JSON-RPC stdio), `mcp/server.rs`, `exec` subcommand. Still missing: `agent_loop.rs` split, tool registry (still match-based `execute_tool` at `agent_loop.rs:906`), TUI→Session bridge.
 
 ## Phase 1 — Local Foundation: mostly done
